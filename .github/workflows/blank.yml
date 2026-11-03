@@ -19,16 +19,15 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
-          cache: 'gradle'
 
-      - name: Grant Execute Permission for Gradlew
-        run: chmod +x gradlew
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
 
-      - name: Build APK (Ignore Lint & Tests)
-        run: ./gradlew assembleRelease -x lint -x test --stacktrace
+      - name: Build APK (Debug/Release Unsigned)
+        run: gradle assembleDebug --stacktrace
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: app-release
-          path: '**/build/outputs/apk/**/*.apk'
+          name: app-debug.apk
+          path: app/build/outputs/apk/debug/app-debug.apk
