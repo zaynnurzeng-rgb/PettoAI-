@@ -20,10 +20,15 @@ jobs:
           distribution: 'zulu'
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Build APK (Debug/Release Unsigned)
+      - name: Build APK (with Dummy GEMINI_API_KEY)
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || 'dummy_api_key_for_build' }}
         run: gradle assembleDebug --stacktrace
 
       - name: Upload APK Artifact
