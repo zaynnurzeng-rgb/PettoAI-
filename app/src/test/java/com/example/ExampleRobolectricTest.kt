@@ -18,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [36])
+@Config(sdk = [34])
 class ExampleRobolectricTest {
 
     @Test
@@ -111,5 +111,17 @@ class ExampleRobolectricTest {
         val initialMode = vm.uiState.value.isMimicModeActive
         vm.toggleMimicMode()
         assertEquals(!initialMode, vm.uiState.value.isMimicModeActive)
+    }
+
+    @Test
+    fun `deterministic homework solver calculates math and science accurately`() {
+        val aiService = GeminiChatService()
+        val zayn = CharacterCatalog.getById("zayn")
+
+        val mathSolution = aiService.solveHomeworkDeterministically("Matematika", "15 + 25", zayn)
+        assertTrue(mathSolution.finalAnswer.contains("40"))
+
+        val scienceSolution = aiService.solveHomeworkDeterministically("IPA", "fotosintesis", zayn)
+        assertTrue(scienceSolution.finalAnswer.contains("glukosa") || scienceSolution.finalAnswer.contains("makanan"))
     }
 }

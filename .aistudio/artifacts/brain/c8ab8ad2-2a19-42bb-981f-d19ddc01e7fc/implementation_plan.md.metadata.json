@@ -1,6 +1,6 @@
 {
-  "summary":  "Rencana implementasi pembersihan tombol makan/toilet/tidur/main dan tombol samping, penambahan fitur Video Call Live dengan kamera depan mengambang (PiP WhatsApp style), serta Mode Ngerjain Tugas Sekolah dengan bimbingan tanya jawab AI dan foto soal tugas.",
-  "updatedAt":  "2026-11-02T01:39:43.724064416Z",
-  "requestFeedback":  true,
-  "userFacing":  true
+  "summary": "Rencana implementasi pembaruan konfigurasi Gemini AI:\n- Integrasi model Gemini 3.5 (gemini-3.5-flash dan gemini-3.5-pro) dengan fallback bertingkat ke gemini-2.0-flash dan gemini-1.5-flash\n- Peningkatan manajemen status percakapan multi-turn (10 percakapan terakhir dengan validasi alternasi role user/model)\n- Konfigurasi prompt Bahasa Indonesia kasual (campuran gaul kekinian, humor santai, ekspresif, dan konsisten dengan persona masing-masing karakter)\n- Penyesuaian tutor tugas sekolah dengan model Gemini 3.5 dan gaya penjelasan yang interaktif dan ramah",
+  "updatedAt": "2026-11-04T01:28:46.421604552Z",
+  "requestFeedback": true,
+  "userFacing": true
 }

@@ -306,8 +306,8 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                // Generates AI reply or falls back quickly within 5.0 seconds max
-                val reply = withTimeoutOrNull(5000L) {
+                // Generates AI reply or falls back quickly within 9.0 seconds max
+                val reply = withTimeoutOrNull(9000L) {
                     aiService.generateReply(
                         userMessage = text,
                         character = state.activeCharacter,
@@ -710,7 +710,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         viewModelScope.launch {
             try {
-                val reply = withTimeoutOrNull(5000L) {
+                val reply = withTimeoutOrNull(9000L) {
                     aiService.generateReply(
                         userMessage = cleanText,
                         character = state.activeCharacter,
@@ -990,118 +990,37 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         val q = customQuestion ?: _uiState.value.homeworkQuestion
         val subject = _uiState.value.homeworkSubject
         val char = _uiState.value.activeCharacter
+        val lang = _uiState.value.selectedLanguage
 
         if (q.isBlank() && _uiState.value.homeworkPhotoBitmap == null) return
 
         _uiState.value = _uiState.value.copy(isSolvingHomework = true)
 
         viewModelScope.launch {
-            delay(800)
-            val solution = generateTutorSolution(subject, q, _uiState.value.homeworkPhotoBitmap, char)
-            _uiState.value = _uiState.value.copy(
-                isSolvingHomework = false,
-                homeworkSolution = solution,
-                currentEmotion = AvatarEmotion.TALKING
-            )
-            val spokenSummary = "${char.name} sudah menemukan solusinya! ${solution.finalAnswer}. Simak langkah-langkahnya ya!"
-            speakText(spokenSummary)
-        }
-    }
+            try {
+                // Resolves via Live Gemini 2.0 Flash AI or high-precision deterministic solver
+                val solution = withTimeoutOrNull(9000L) {
+                    aiService.generateHomeworkHelp(subject, q, char, lang)
+                } ?: aiService.solveHomeworkDeterministically(subject, q, char)
 
-    private fun generateTutorSolution(
-        subject: String,
-        question: String,
-        photo: android.graphics.Bitmap?,
-        char: PetCharacter
-    ): HomeworkSolution {
-        val actualQuestion = if (question.isNotBlank()) question else "Soal dari foto lembar tugas $subject"
-
-        return when (subject.lowercase()) {
-            "matematika" -> {
-                if (question.contains("+") || question.contains("-") || question.contains("x") || question.contains("*") || question.contains("/")) {
-                    val steps = listOf(
-                        "Identifikasi angka dan operasi hitung pada soal: $actualQuestion",
-                        "Kerjakan operasi perkalian atau pembagian terlebih dahulu sebelum penjumlahan atau pengurangan.",
-                        "Hitung dengan teliti langkah per langkah untuk memastikan tidak ada kesalahan tanda.",
-                        "Verifikasi kembali hasil akhir dengan cara substitusi atau pembuktian balik."
-                    )
-                    HomeworkSolution(
-                        subject = "Matematika",
-                        questionSummary = actualQuestion,
-                        stepByStep = steps,
-                        finalAnswer = "Hasil pengerjaan terverifikasi akurat dan siap dicatat di buku tugasmu!",
-                        tutorTip = "Tips dari ${char.name}: Dalam matematika, selalu dahulukan tanda kurung dan perkalian ya!"
-                    )
-                } else {
-                    HomeworkSolution(
-                        subject = "Matematika",
-                        questionSummary = actualQuestion,
-                        stepByStep = listOf(
-                            "Tuliskan apa yang diketahui dan apa yang ditanyakan dari soal cerita ini.",
-                            "Tentukan rumus atau model matematika yang tepat sesuai konsep bab ini.",
-                            "Masukkan nilai-nilai yang diketahui ke dalam rumus dan selesaikan persamaannya.",
-                            "Tuliskan kesimpulan akhir beserta satuan yang sesuai (misal: cm, m², rupiah, dll)."
-                        ),
-                        finalAnswer = "Solusi konsep matematika telah disusun lengkap.",
-                        tutorTip = "Tips dari ${char.name}: Jangan lupa selalu tuliskan satuan di jawaban akhir ya!"
-                    )
-                }
-            }
-            "ipa" -> {
-                HomeworkSolution(
-                    subject = "IPA (Sains)",
-                    questionSummary = actualQuestion,
-                    stepByStep = listOf(
-                        "Pahami fenomena alam atau konsep sains yang sedang dibahas pada soal.",
-                        "Gunakan hukum dasar IPA (misal: Hukum Newton, Fotosintesis, atau Reaksi Zat) sebagai landasan teori.",
-                        "Hubungkan sebab-akibat dari kondisi pada soal dengan teori yang berlaku.",
-                        "Tarik kesimpulan ilmiah yang jelas, padat, dan sesuai materi kurikulum sekolah."
-                    ),
-                    finalAnswer = "Konsep sains telah dianalisis berdasarkan prinsip ilmiah yang benar.",
-                    tutorTip = "Tips dari ${char.name}: IPA itu seru kalau kita bayangkan kejadiannya di dunia nyata!"
+                _uiState.value = _uiState.value.copy(
+                    isSolvingHomework = false,
+                    homeworkSolution = solution,
+                    currentEmotion = AvatarEmotion.TALKING
                 )
-            }
-            "bahasa indonesia" -> {
-                HomeworkSolution(
-                    subject = "Bahasa Indonesia",
-                    questionSummary = actualQuestion,
-                    stepByStep = listOf(
-                        "Baca dan telaah teks atau kalimat soal secara cermat dari awal hingga akhir.",
-                        "Temukan ide pokok, struktur kalimat (S-P-O-K), atau kaidah kebahasaan yang ditanyakan.",
-                        "Perhatikan ejaan sesuai pedoman EYD/PUEBI dan pilihlah kosakata baku yang tepat.",
-                        "Susun jawaban akhir menggunakan kalimat efektif yang santun dan runtut."
-                    ),
-                    finalAnswer = "Jawaban telah disesuaikan dengan kaidah tata bahasa Indonesia yang baik dan benar.",
-                    tutorTip = "Tips dari ${char.name}: Gunakan kata kunci di paragraf untuk menemukan gagasan utama!"
+                val spokenSummary = "${char.name} sudah menemukan solusinya! ${solution.finalAnswer}. Simak langkah-langkahnya ya!"
+                speakText(spokenSummary)
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Error solving homework: ${e.message}", e)
+                val fallbackSolution = aiService.solveHomeworkDeterministically(subject, q, char)
+                _uiState.value = _uiState.value.copy(
+                    isSolvingHomework = false,
+                    homeworkSolution = fallbackSolution,
+                    currentEmotion = AvatarEmotion.TALKING
                 )
-            }
-            "bahasa inggris" -> {
-                HomeworkSolution(
-                    subject = "English",
-                    questionSummary = actualQuestion,
-                    stepByStep = listOf(
-                        "Identify the grammar rule, tense (Past, Present, Future), or vocabulary in question.",
-                        "Check subject-verb agreement and key prepositions/adjectives.",
-                        "Formulate the sentence naturally using standard English conventions.",
-                        "Double-check spelling, punctuation, and contextual meaning."
-                    ),
-                    finalAnswer = "The English explanation and solution are grammatically accurate and clear.",
-                    tutorTip = "Tips from ${char.name}: Practice reading the sentence out loud to check if it sounds natural!"
-                )
-            }
-            else -> {
-                HomeworkSolution(
-                    subject = subject,
-                    questionSummary = actualQuestion,
-                    stepByStep = listOf(
-                        "Pahami inti permasalahan atau topik yang menjadi fokus dari pertanyaan tugas ini.",
-                        "Kumpulkan fakta kunci, data, dan latar belakang teori yang relevan.",
-                        "Analisis keterkaitan antar poin untuk menyusun argumen atau penyelesaian yang logis.",
-                        "Buat kesimpulan menyeluruh yang menjawab tuntas instruksi soal."
-                    ),
-                    finalAnswer = "Materi telah dianalisis tuntas dan siap untuk kamu pelajari dengan mudah.",
-                    tutorTip = "Tips dari ${char.name}: Belajar sedikit demi sedikit tiap hari jauh lebih efektif daripada kebut semalam!"
-                )
+                speakText("${char.name} sudah siapkan pembahasan lengkapnya. Yuk disimak!")
+            } finally {
+                _uiState.value = _uiState.value.copy(isSolvingHomework = false)
             }
         }
     }
