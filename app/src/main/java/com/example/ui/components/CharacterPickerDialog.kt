@@ -27,7 +27,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -39,6 +38,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.model.CharacterCatalog
+import com.example.model.CharacterGender
 import com.example.model.PetCharacter
 
 @Composable
@@ -51,11 +51,19 @@ fun CharacterPickerDialog(
     AlertDialog(
         onDismissRequest = onDismiss,
         title = {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(text = "🐾 ", fontSize = 22.sp)
+            Column {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(text = "🐾 ", fontSize = 22.sp)
+                    Text(
+                        text = "Pilih Karakter & Suara AI",
+                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    )
+                }
+                Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    text = "Pilih Sahabat Avatar 3D",
-                    style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.Bold)
+                    text = "Tiap karakter punya jenis kelamin (Cowok/Cewek) dan warna suara natural ala Gemini AI yang berbeda. Ketuk ikon 🔊 untuk dengar suaranya!",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             }
         },
@@ -64,10 +72,14 @@ fun CharacterPickerDialog(
                 verticalArrangement = Arrangement.spacedBy(12.dp),
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(440.dp)
+                    .height(460.dp)
             ) {
                 items(CharacterCatalog.characters) { char ->
                     val isSelected = char.id == currentCharacter.id
+                    val isFemale = char.gender == CharacterGender.FEMALE
+
+                    val genderBgColor = if (isFemale) Color(0xFFFCE4EC) else Color(0xFFE3F2FD)
+                    val genderTextColor = if (isFemale) Color(0xFFC2185B) else Color(0xFF1565C0)
 
                     val bgBrush = if (isSelected) {
                         Brush.horizontalGradient(
@@ -121,7 +133,7 @@ fun CharacterPickerDialog(
                                     .size(54.dp)
                                     .clip(CircleShape)
                                     .background(char.defaultFurColor)
-                                    .border(2.dp, Color.White.copy(alpha = 0.5f), CircleShape)
+                                    .border(2.dp, Color.White.copy(alpha = 0.6f), CircleShape)
                             ) {
                                 Text(
                                     text = char.species.emoji,
@@ -129,28 +141,51 @@ fun CharacterPickerDialog(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(14.dp))
+                            Spacer(modifier = Modifier.width(12.dp))
 
                             Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                ) {
                                     Text(
                                         text = char.name,
                                         style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Bold)
                                     )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    Text(
-                                        text = char.badge,
-                                        style = MaterialTheme.typography.labelSmall.copy(
-                                            color = MaterialTheme.colorScheme.primary,
-                                            fontWeight = FontWeight.SemiBold
+                                    Surface(
+                                        shape = RoundedCornerShape(50),
+                                        color = genderBgColor
+                                    ) {
+                                        Text(
+                                            text = "${char.gender.symbol} ${char.gender.shortLabel}",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = genderTextColor,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 10.sp
+                                            ),
+                                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
                                         )
-                                    )
+                                    }
                                 }
+
+                                Spacer(modifier = Modifier.height(2.dp))
+
                                 Text(
-                                    text = "Spesies: ${char.species.displayName}",
-                                    style = MaterialTheme.typography.labelSmall,
-                                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.85f)
+                                    text = "🎙️ ${char.voicePersona.displayName}",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.SemiBold,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
                                 )
+
+                                Text(
+                                    text = char.voicePersona.timbreDescription,
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.9f)
+                                )
+
+                                Spacer(modifier = Modifier.height(2.dp))
+
                                 Text(
                                     text = char.description,
                                     style = MaterialTheme.typography.bodySmall,
@@ -159,13 +194,15 @@ fun CharacterPickerDialog(
                                 )
                             }
 
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(6.dp))
 
                             // Voice test button
                             IconButton(
                                 onClick = { onPreviewVoice(char) },
                                 modifier = Modifier
-                                    .size(40.dp)
+                                    .size(44.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.14f))
                                     .testTag("preview_voice_${char.id}")
                             ) {
                                 Icon(
@@ -176,6 +213,7 @@ fun CharacterPickerDialog(
                             }
 
                             if (isSelected) {
+                                Spacer(modifier = Modifier.width(4.dp))
                                 Icon(
                                     imageVector = Icons.Default.CheckCircle,
                                     contentDescription = "Sedang aktif",

@@ -67,7 +67,7 @@ fun SettingsDialog(
     isGeminiConnected: Boolean = true,
     currentApiKey: String = "",
     onApiKeySaved: (String) -> Unit = {},
-    voiceEngineMode: VoiceEngineMode = VoiceEngineMode.CARTOON_MIMIC,
+    voiceEngineMode: VoiceEngineMode = VoiceEngineMode.GEMINI_NATURAL,
     onVoiceEngineModeSelected: (VoiceEngineMode) -> Unit = {},
     elevenLabsApiKey: String = "",
     onElevenLabsApiKeySaved: (String) -> Unit = {},
@@ -154,13 +154,83 @@ fun SettingsDialog(
                     }
                 }
 
+                // Gemini Native TTS Key Config right below Gemini Natural Voice
+                if (voiceEngineMode == VoiceEngineMode.GEMINI_NATURAL) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Kunci Gemini API untuk Suara Studio (Puck / Kore / Aoede / Fenrir / Charon)",
+                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = if (geminiKeyInput.isNotBlank())
+                            "✓ Kunci API terpasang — menggunakan suara asli Gemini 2.5 Flash TTS."
+                        else
+                            "Tempel kunci AIzaSy... dari Google AI Studio (atau isi GEMINI_API_KEY di panel Secrets AI Studio) untuk mengaktifkan vokal neural Gemini asli.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (geminiKeyInput.isNotBlank()) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        OutlinedTextField(
+                            value = geminiKeyInput,
+                            onValueChange = {
+                                geminiKeyInput = it
+                                geminiKeySavedToast = false
+                            },
+                            placeholder = { Text("AIzaSy... (Gemini API Key)", fontSize = 12.sp) },
+                            singleLine = true,
+                            visualTransformation = PasswordVisualTransformation(),
+                            keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f).height(50.dp).testTag("gemini_voice_api_key_input")
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            onClick = {
+                                onApiKeySaved(geminiKeyInput)
+                                geminiKeySavedToast = true
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.height(50.dp).testTag("save_gemini_voice_api_key_button")
+                        ) {
+                            Text("Aktifkan", fontSize = 12.sp)
+                        }
+                    }
+                    if (geminiKeySavedToast) {
+                        Text(
+                            text = "✓ Kunci Gemini API aktif & sedang menguji suara karakter!",
+                            style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32)),
+                            modifier = Modifier.padding(top = 4.dp)
+                        )
+                    }
+                }
+
                 // ElevenLabs Key Config
                 if (voiceEngineMode == VoiceEngineMode.ELEVENLABS_NEURAL) {
                     Spacer(modifier = Modifier.height(8.dp))
-                    Text(
-                        text = "Kunci ElevenLabs API",
-                        style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(
+                            text = "Kunci ElevenLabs API (Secrets / Manual)",
+                            style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold)
+                        )
+                        if (elevenLabsKeyInput.isNotBlank()) {
+                            Text(
+                                text = "● Secret Aktif",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    color = Color(0xFF2E7D32),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                        }
+                    }
                     Spacer(modifier = Modifier.height(4.dp))
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
@@ -172,7 +242,7 @@ fun SettingsDialog(
                                 elevenLabsKeyInput = it
                                 elevenLabsSavedToast = false
                             },
-                            placeholder = { Text("xi-api-key...", fontSize = 12.sp) },
+                            placeholder = { Text("Otomatis dari AI Studio Secrets (ELEVENLABS_API_KEY)...", fontSize = 12.sp) },
                             singleLine = true,
                             visualTransformation = PasswordVisualTransformation(),
                             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
@@ -193,7 +263,7 @@ fun SettingsDialog(
                     }
                     if (elevenLabsSavedToast) {
                         Text(
-                            text = "✓ Kunci ElevenLabs disimpan!",
+                            text = "✓ Kunci ElevenLabs disimpan & diuji!",
                             style = MaterialTheme.typography.labelSmall.copy(color = Color(0xFF2E7D32)),
                             modifier = Modifier.padding(top = 4.dp)
                         )
@@ -292,6 +362,64 @@ fun SettingsDialog(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
+                // Room Database Status Card
+                Surface(
+                    shape = RoundedCornerShape(16.dp),
+                    color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.45f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.secondary.copy(alpha = 0.4f)),
+                    modifier = Modifier.fillMaxWidth().padding(bottom = 12.dp).testTag("room_db_status_card")
+                ) {
+                    Column(modifier = Modifier.padding(14.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(text = "💾", fontSize = 18.sp)
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "Room Database Lokal",
+                                    style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(Color(0xFFE8F5E9))
+                                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Check,
+                                    contentDescription = null,
+                                    tint = Color(0xFF2E7D32),
+                                    modifier = Modifier.size(12.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Auto-Sync Aktif",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = Color(0xFF2E7D32)
+                                    )
+                                )
+                            }
+                        }
+
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "Kostumisasi tiap karakter, pengaturan suara natural, riwayat chat, progres belajar, dan jurnal mood tersimpan otomatis di Room Database.",
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        )
+                    }
+                }
+
                 // Gemini AI Status Card
                 Surface(
                     shape = RoundedCornerShape(16.dp),
@@ -314,7 +442,7 @@ fun SettingsDialog(
                                 )
                                 Spacer(modifier = Modifier.width(8.dp))
                                 Text(
-                                    text = "Google Gemini AI",
+                                    text = "Google Gemini AI (Streaming Kilat)",
                                     style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Bold)
                                 )
                             }
@@ -346,7 +474,7 @@ fun SettingsDialog(
 
                         Spacer(modifier = Modifier.height(6.dp))
                         Text(
-                            text = "Model Gemini 2.5 Flash aktif untuk percakapan alami, nyambung, dan berkarakter seperti manusia asli.",
+                            text = "Dioptimalkan dengan token streaming real-time & ucapan kalimat pertama instan. Suara natural berkarakter (Cowok/Cewek) aktif secara bawaan.",
                             style = MaterialTheme.typography.bodySmall.copy(
                                 fontSize = 12.sp,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant

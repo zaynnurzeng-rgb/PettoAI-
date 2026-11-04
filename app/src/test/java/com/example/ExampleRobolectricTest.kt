@@ -18,7 +18,7 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [34])
+@Config(sdk = [36])
 class ExampleRobolectricTest {
 
     @Test
@@ -123,5 +123,62 @@ class ExampleRobolectricTest {
 
         val scienceSolution = aiService.solveHomeworkDeterministically("IPA", "fotosintesis", zayn)
         assertTrue(scienceSolution.finalAnswer.contains("glukosa") || scienceSolution.finalAnswer.contains("makanan"))
+    }
+
+    @Test
+    fun `characterStateManager persists customizations and session state across sessions`() = kotlinx.coroutines.runBlocking {
+        val context = ApplicationProvider.getApplicationContext<Context>()
+        val db = androidx.room.Room.inMemoryDatabaseBuilder(
+            context,
+            com.example.data.CharacterStateDatabase::class.java
+        ).allowMainThreadQueries().build()
+
+        val manager = com.example.data.CharacterStateManager(db.characterStateDao())
+        val mochi = CharacterCatalog.getById("mochi")
+        val customAppearance = com.example.model.AvatarCustomization(
+            furColor = mochi.defaultFurColor,
+            furColorId = "pink",
+            eyeStyle = com.example.model.EyeStyle.HEARTS,
+            earStyle = com.example.model.EarStyle.RIBBON_EARS,
+            costume = com.example.model.CostumeStyle.SUPERHERO,
+            accessory = com.example.model.AccessoryStyle.SUNGLASSES,
+            roomTheme = com.example.model.RoomTheme.STARRY_BEDROOM
+        )
+
+        manager.saveFullState(
+            activeCharacter = mochi,
+            customization = customAppearance,
+            selectedLanguage = AppLanguage.INDONESIAN,
+            backgroundTheme = BackgroundTheme.BEDROOM,
+            voiceEngineMode = com.example.audio.VoiceEngineMode.GEMINI_NATURAL,
+            voicePitch = 1.22f,
+            speechRate = 1.06f,
+            affectionScore = 75,
+            coins = 2100,
+            diamonds = 250,
+            playerLevel = 15,
+            levelProgress = 0.4f,
+            hungerLevel = 0.95f,
+            toiletLevel = 0.85f,
+            energyLevel = 0.90f,
+            funLevel = 1.0f,
+            quizStreak = 6,
+            pomodoroCompletedSessions = 4
+        )
+
+        val restored = manager.loadOrInitializeState()
+        assertEquals("mochi", restored.activeCharacter.id)
+        assertEquals(com.example.model.CostumeStyle.SUPERHERO, restored.customization.costume)
+        assertEquals(com.example.model.AccessoryStyle.SUNGLASSES, restored.customization.accessory)
+        assertEquals(com.example.model.EyeStyle.HEARTS, restored.customization.eyeStyle)
+        assertEquals(com.example.model.EarStyle.RIBBON_EARS, restored.customization.earStyle)
+        assertEquals("pink", restored.customization.furColorId)
+        assertEquals(BackgroundTheme.BEDROOM, restored.backgroundTheme)
+        assertEquals(2100, restored.coins)
+        assertEquals(75, restored.affectionScore)
+        assertEquals(6, restored.quizStreak)
+        assertEquals(4, restored.pomodoroCompletedSessions)
+
+        db.close()
     }
 }

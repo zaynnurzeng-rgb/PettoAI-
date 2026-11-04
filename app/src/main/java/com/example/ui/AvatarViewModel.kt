@@ -3,6 +3,7 @@ package com.example.ui
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.ai.GeminiChatService
 import com.example.audio.SpeechRecognitionHelper
 import com.example.audio.SpeechTtsEngine
@@ -29,9 +30,28 @@ import com.example.model.TimeOfDay
 import com.example.model.TouchZone
 import com.example.model.EarStyle
 import com.example.audio.VoiceEngineMode
+import com.example.data.CharacterStateManager
 
 import com.example.model.CareOverlayType
 import com.example.model.FoodItem
+import com.example.ai.GeminiStudyCompanionHelper
+import com.example.model.AccessoryStyle
+import com.example.model.CostumeStyle
+import com.example.model.FlashcardCatalog
+import com.example.model.MoodJournalEntry
+import com.example.model.MoodType
+import com.example.model.PomodoroPreset
+import com.example.model.QuizCatalog
+import com.example.model.QuizQuestion
+import com.example.model.SpecialPetFood
+import com.example.model.SpecialPetFoodCatalog
+import com.example.model.StudyFlashcard
+import org.json.JSONArray
+import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.UUID
 
 enum class FaceToFaceCallState {
     CONNECTING,
@@ -56,9 +76,9 @@ data class AvatarUiState(
     val currentEmotion: AvatarEmotion = AvatarEmotion.IDLE,
     val affectionScore: Int = 20,
     val selectedLanguage: AppLanguage = AppLanguage.INDONESIAN,
-    val voicePitch: Float = 1.25f,
-    val speechRate: Float = 1.15f,
-    val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.CARTOON_MIMIC,
+    val voicePitch: Float = 0.96f,
+    val speechRate: Float = 1.04f,
+    val voiceEngineMode: VoiceEngineMode = VoiceEngineMode.ELEVENLABS_NEURAL,
     val isLoadingAi: Boolean = false,
     val backgroundTheme: BackgroundTheme = BackgroundTheme.LIVING_ROOM,
     val currentTimeOfDay: TimeOfDay = TimeOfDay.fromCurrentHour(),
@@ -82,13 +102,29 @@ data class AvatarUiState(
     val isMimicModeActive: Boolean = false,
     val miniGameScore: Int = 0,
     val careFeedbackMessage: String = "",
-    // Mode Ngerjain Tugas Sekolah
+    // Mode Ngerjain Tugas Sekolah & Scan Foto Soal (Multimodal Vision)
     val showHomeworkMode: Boolean = false,
     val homeworkSubject: String = "Matematika",
     val homeworkQuestion: String = "",
     val homeworkSolution: HomeworkSolution? = null,
     val isSolvingHomework: Boolean = false,
-    val homeworkPhotoBitmap: android.graphics.Bitmap? = null
+    val homeworkPhotoBitmap: android.graphics.Bitmap? = null,
+    // 6 New Study & Companion Features
+    val showQuizSheet: Boolean = false,
+    val quizStreak: Int = 0,
+    val showPomodoroSheet: Boolean = false,
+    val activePomodoroPreset: PomodoroPreset = PomodoroPreset.FOCUS_25,
+    val pomodoroRemainingSeconds: Int = 25 * 60,
+    val isPomodoroRunning: Boolean = false,
+    val pomodoroCompletedSessions: Int = 0,
+    val showPetCareShopSheet: Boolean = false,
+    val showMoodJournalSheet: Boolean = false,
+    val moodJournalEntries: List<MoodJournalEntry> = emptyList(),
+    val isSavingMoodEntry: Boolean = false,
+    val showFlashcardSheet: Boolean = false,
+    val flashcards: List<StudyFlashcard> = FlashcardCatalog.getDefaultDeck("Matematika"),
+    val isGeneratingFlashcards: Boolean = false,
+    val isRoomDbActive: Boolean = true
 )
 
 data class HomeworkSolution(
@@ -105,9 +141,11 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     val uiState: StateFlow<AvatarUiState> = _uiState.asStateFlow()
 
     private val aiService = GeminiChatService(application)
+    private val studyCompanionHelper = GeminiStudyCompanionHelper(aiService)
     private var emotionResetJob: Job? = null
     private var callTimerJob: Job? = null
     private var autoListenJob: Job? = null
+    private var pomodoroTimerJob: Job? = null
 
     private val ttsEngine = SpeechTtsEngine(application) { isSpeaking ->
         _uiState.value = _uiState.value.copy(
@@ -191,36 +229,125 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         application.getSharedPreferences("pawpal_ai_prefs", android.content.Context.MODE_PRIVATE)
     }
 
+    val characterStateManager: CharacterStateManager = CharacterStateManager.getInstance(application)
+
     init {
         val initialChar = _uiState.value.activeCharacter
         val initialMode = getVoiceEngineMode()
+        val savedCoins = prefs.getInt("saved_petto_coins", 1500)
+        val savedMoodEntries = loadMoodEntriesFromPrefs()
 
         _uiState.value = _uiState.value.copy(
             voicePitch = initialChar.defaultVoicePitch,
             speechRate = initialChar.defaultSpeechRate,
             voiceEngineMode = initialMode,
+            coins = savedCoins,
+            moodJournalEntries = savedMoodEntries,
             customization = _uiState.value.customization.copy(furColor = initialChar.defaultFurColor)
         )
 
         ttsEngine.engineMode = initialMode
         ttsEngine.elevenLabsApiKey = getElevenLabsApiKey()
         ttsEngine.googleApiKey = getGoogleCloudTtsApiKey()
-        ttsEngine.setVoiceProfile(initialChar.defaultVoicePitch, initialChar.defaultSpeechRate)
+        ttsEngine.setVoiceProfile(initialChar.defaultVoicePitch, initialChar.defaultSpeechRate, initialChar)
         ttsEngine.setLanguage(_uiState.value.selectedLanguage)
 
         viewModelScope.launch {
-            delay(500)
-            deliverGreeting(initialChar, _uiState.value.selectedLanguage)
+            val restored = try {
+                characterStateManager.loadOrInitializeState(
+                    legacyCoins = savedCoins,
+                    legacyVoiceMode = initialMode,
+                    legacyMoodEntries = savedMoodEntries
+                )
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Failed to load state from Room: ${e.message}", e)
+                null
+            }
+
+            if (restored != null) {
+                val activeVoiceMode = if (getElevenLabsApiKey().isNotBlank() && !prefs.contains("voice_engine_mode_v3")) {
+                    VoiceEngineMode.ELEVENLABS_NEURAL
+                } else {
+                    restored.voiceEngineMode
+                }
+                _uiState.value = _uiState.value.copy(
+                    activeCharacter = restored.activeCharacter,
+                    customization = restored.customization,
+                    selectedLanguage = restored.selectedLanguage,
+                    backgroundTheme = restored.backgroundTheme,
+                    voiceEngineMode = activeVoiceMode,
+                    voicePitch = restored.voicePitch,
+                    speechRate = restored.speechRate,
+                    affectionScore = restored.affectionScore,
+                    coins = restored.coins,
+                    diamonds = restored.diamonds,
+                    playerLevel = restored.playerLevel,
+                    levelProgress = restored.levelProgress,
+                    hungerLevel = restored.hungerLevel,
+                    toiletLevel = restored.toiletLevel,
+                    energyLevel = restored.energyLevel,
+                    funLevel = restored.funLevel,
+                    quizStreak = restored.quizStreak,
+                    pomodoroCompletedSessions = restored.pomodoroCompletedSessions,
+                    messages = if (restored.messages.isNotEmpty()) restored.messages else _uiState.value.messages,
+                    moodJournalEntries = if (restored.moodJournalEntries.isNotEmpty()) restored.moodJournalEntries else _uiState.value.moodJournalEntries,
+                    isRoomDbActive = true
+                )
+                ttsEngine.engineMode = activeVoiceMode
+                ttsEngine.elevenLabsApiKey = getElevenLabsApiKey()
+                ttsEngine.setVoiceProfile(
+                    restored.voicePitch,
+                    restored.speechRate,
+                    restored.activeCharacter
+                )
+                ttsEngine.setLanguage(restored.selectedLanguage)
+            }
+
+            delay(300)
+            deliverGreeting(_uiState.value.activeCharacter, _uiState.value.selectedLanguage)
+        }
+    }
+
+    private fun persistCurrentState() {
+        val snapshot = _uiState.value
+        viewModelScope.launch {
+            try {
+                characterStateManager.saveFullState(
+                    activeCharacter = snapshot.activeCharacter,
+                    customization = snapshot.customization,
+                    selectedLanguage = snapshot.selectedLanguage,
+                    backgroundTheme = snapshot.backgroundTheme,
+                    voiceEngineMode = snapshot.voiceEngineMode,
+                    voicePitch = snapshot.voicePitch,
+                    speechRate = snapshot.speechRate,
+                    affectionScore = snapshot.affectionScore,
+                    coins = snapshot.coins,
+                    diamonds = snapshot.diamonds,
+                    playerLevel = snapshot.playerLevel,
+                    levelProgress = snapshot.levelProgress,
+                    hungerLevel = snapshot.hungerLevel,
+                    toiletLevel = snapshot.toiletLevel,
+                    energyLevel = snapshot.energyLevel,
+                    funLevel = snapshot.funLevel,
+                    quizStreak = snapshot.quizStreak,
+                    pomodoroCompletedSessions = snapshot.pomodoroCompletedSessions,
+                    messages = snapshot.messages,
+                    moodJournalEntries = snapshot.moodJournalEntries
+                )
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Failed to persist character state: ${e.message}", e)
+            }
         }
     }
 
     private fun deliverGreeting(character: PetCharacter, language: AppLanguage) {
         val greetingText = when (character.id) {
-            "zayn" -> "Cih! Aku Zayn. Ngapain kamu ke sini? B-bukan berarti aku seneng ditemenin ya! Cepetan mau apa?!"
-            "siti" -> "Halo sayangku manis, nama Siti. Siti sangat bersyukur bisa mendampingimu hari ini. Ceritakan harimu ya sayang."
-            "rizky" -> "Siap! Rizky siap bertugas! Pertahankan disiplin dan fokus pada target kita hari ini!"
-            "jamal" -> "Hoaaammm... Jamal lagi mager banget nih. Kalau gak ada urusan penting mending kita tidur siang bareng."
-            else -> "HEH! Lu ngeliatin apa?! Gua Heru, jangan cari gara-gara sama gua kalau gak mau kena semprot!"
+            "zayn" -> "Cih! Aku Zayn. Ngapain kamu ke sini? Bukan berarti aku seneng ditemenin ya, cepetan mau ngobrol apa?"
+            "siti" -> "Halo sayangku manis, Siti di sini. Siti senang sekali bisa menemanimu hari ini. Ceritakan harimu ya sayang."
+            "mochi" -> "Hai bestie! Aku Mochi! Wah seru banget kita bisa ngobrol bareng hari ini, mau bahas apa nih kita?"
+            "rizky" -> "Siap! Rizky siap bertugas! Pertahankan semangat dan fokus pada target kita hari ini, kawan!"
+            "jamal" -> "Hoaam, Jamal lagi santuy banget nih bro. Kalau mau ngobrol sambil rebahan, sini merapat."
+            else -> "Heh! Gua Heru nih! Jangan sungkan kalau mau ngobrol atau tanya tugas sama beruang keren ini ya!"
         }
 
         updateSpeechAndAutoSpeak(greetingText, AvatarEmotion.HAPPY)
@@ -298,6 +425,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         val updatedMessages = state.messages + userMsg
+        val streamingMsgId = UUID.randomUUID().toString()
         _uiState.value = state.copy(
             messages = updatedMessages,
             isLoadingAi = true,
@@ -305,52 +433,124 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         viewModelScope.launch {
+            var spokenFirstSentencePrefix: String? = null
             try {
-                // Generates AI reply or falls back quickly within 9.0 seconds max
-                val reply = withTimeoutOrNull(9000L) {
-                    aiService.generateReply(
+                // Real-time streaming AI reply via Firebase AI Logic (gemini-3.5-flash-lite primary)
+                val reply = withTimeoutOrNull(30_000L) {
+                    aiService.generateReplyStream(
                         userMessage = text,
                         character = state.activeCharacter,
                         language = state.selectedLanguage,
-                        history = updatedMessages
+                        history = updatedMessages,
+                        onPartialText = { partialText ->
+                            val currentMsgs = _uiState.value.messages
+                            val existingIndex = currentMsgs.indexOfFirst { it.id == streamingMsgId }
+                            val updatedStreamList = if (existingIndex >= 0) {
+                                currentMsgs.toMutableList().apply {
+                                    this[existingIndex] = this[existingIndex].copy(text = partialText)
+                                }
+                            } else {
+                                currentMsgs + ChatMessage(
+                                    id = streamingMsgId,
+                                    senderName = state.activeCharacter.name,
+                                    text = partialText,
+                                    isUser = false,
+                                    emotion = AvatarEmotion.TALKING
+                                )
+                            }
+                            _uiState.value = _uiState.value.copy(
+                                messages = updatedStreamList,
+                                lastAvatarSpeech = partialText,
+                                isLoadingAi = false,
+                                currentEmotion = AvatarEmotion.TALKING
+                            )
+
+                            // Start speaking the first complete sentence immediately for ultra-low voice latency
+                            // when using local natural voice; if a Cloud/Gemini Native TTS API key is active,
+                            // synthesize the complete response with Gemini Native Audio TTS for studio vocal quality.
+                            if (!ttsEngine.hasCloudNeuralKey() && spokenFirstSentencePrefix == null && partialText.length >= 16) {
+                                val clauses = ttsEngine.splitIntoNaturalClauses(partialText)
+                                if (clauses.size >= 2 && clauses.first().length >= 10) {
+                                    val firstSentence = clauses.first()
+                                    spokenFirstSentencePrefix = firstSentence
+                                    ttsEngine.speakStreamedSentence(
+                                        sentenceText = firstSentence,
+                                        pitch = _uiState.value.voicePitch,
+                                        rate = _uiState.value.speechRate,
+                                        character = state.activeCharacter,
+                                        flushQueue = true
+                                    )
+                                }
+                            }
+                        }
                     )
                 } ?: aiService.getFastFallbackReply(
                     userMessage = text,
                     character = state.activeCharacter,
-                    language = state.selectedLanguage
+                    language = state.selectedLanguage,
+                    history = updatedMessages
                 )
 
-                val avatarReplyMsg = ChatMessage(
+                val finalAvatarMsg = ChatMessage(
+                    id = streamingMsgId,
                     senderName = state.activeCharacter.name,
                     text = reply.text,
                     isUser = false,
                     emotion = reply.emotion
                 )
 
+                val currentMsgs = _uiState.value.messages
+                val existingIndex = currentMsgs.indexOfFirst { it.id == streamingMsgId }
+                val finalMessages = if (existingIndex >= 0) {
+                    currentMsgs.toMutableList().apply { this[existingIndex] = finalAvatarMsg }
+                } else {
+                    currentMsgs + finalAvatarMsg
+                }
+
                 val newAffection = (state.affectionScore + 3).coerceAtMost(100)
 
                 _uiState.value = _uiState.value.copy(
-                    messages = _uiState.value.messages + avatarReplyMsg,
+                    messages = finalMessages,
+                    lastAvatarSpeech = reply.text,
+                    currentEmotion = reply.emotion,
                     isLoadingAi = false,
                     affectionScore = newAffection
                 )
+                persistCurrentState()
 
-                updateSpeechAndAutoSpeak(reply.text, reply.emotion)
+                val alreadySpoken = spokenFirstSentencePrefix
+                if (alreadySpoken != null && reply.text.startsWith(alreadySpoken)) {
+                    val remaining = reply.text.removePrefix(alreadySpoken).trim()
+                    if (remaining.isNotBlank()) {
+                        ttsEngine.speakStreamedSentence(
+                            sentenceText = remaining,
+                            pitch = _uiState.value.voicePitch,
+                            rate = _uiState.value.speechRate,
+                            character = state.activeCharacter,
+                            flushQueue = false
+                        )
+                    }
+                } else {
+                    updateSpeechAndAutoSpeak(reply.text, reply.emotion)
+                }
             } catch (e: TimeoutCancellationException) {
                 Log.d("AvatarViewModel", "AI response timeout: ${e.message}, using fallback")
                 val fallbackReply = aiService.getFastFallbackReply(
                     userMessage = text,
                     character = state.activeCharacter,
-                    language = state.selectedLanguage
+                    language = state.selectedLanguage,
+                    history = updatedMessages
                 )
                 val avatarReplyMsg = ChatMessage(
+                    id = streamingMsgId,
                     senderName = state.activeCharacter.name,
                     text = fallbackReply.text,
                     isUser = false,
                     emotion = fallbackReply.emotion
                 )
+                val currentMsgs = _uiState.value.messages.filterNot { it.id == streamingMsgId }
                 _uiState.value = _uiState.value.copy(
-                    messages = _uiState.value.messages + avatarReplyMsg,
+                    messages = currentMsgs + avatarReplyMsg,
                     isLoadingAi = false
                 )
                 updateSpeechAndAutoSpeak(fallbackReply.text, fallbackReply.emotion)
@@ -359,16 +559,19 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 val fallbackReply = aiService.getFastFallbackReply(
                     userMessage = text,
                     character = state.activeCharacter,
-                    language = state.selectedLanguage
+                    language = state.selectedLanguage,
+                    history = updatedMessages
                 )
                 val avatarReplyMsg = ChatMessage(
+                    id = streamingMsgId,
                     senderName = state.activeCharacter.name,
                     text = fallbackReply.text,
                     isUser = false,
                     emotion = fallbackReply.emotion
                 )
+                val currentMsgs = _uiState.value.messages.filterNot { it.id == streamingMsgId }
                 _uiState.value = _uiState.value.copy(
-                    messages = _uiState.value.messages + avatarReplyMsg,
+                    messages = currentMsgs + avatarReplyMsg,
                     isLoadingAi = false
                 )
                 updateSpeechAndAutoSpeak(fallbackReply.text, fallbackReply.emotion)
@@ -393,6 +596,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             TouchZone.FEET -> AvatarEmotion.SURPRISED
         }
         _uiState.value = state.copy(affectionScore = newAffection)
+        persistCurrentState()
         updateSpeechAndAutoSpeak(reactionText, emotion)
     }
 
@@ -403,6 +607,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     fun setBackgroundTheme(theme: BackgroundTheme) {
         val oldTheme = _uiState.value.backgroundTheme
         _uiState.value = _uiState.value.copy(backgroundTheme = theme)
+        persistCurrentState()
         if (oldTheme != theme) {
             val char = _uiState.value.activeCharacter
             val comment = when (theme) {
@@ -481,7 +686,12 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     fun replayCurrentSpeech() {
         val speech = _uiState.value.lastAvatarSpeech
         if (speech.isNotBlank()) {
-            ttsEngine.speak(speech, _uiState.value.voicePitch, _uiState.value.speechRate)
+            ttsEngine.speak(
+                text = speech,
+                pitch = _uiState.value.voicePitch,
+                rate = _uiState.value.speechRate,
+                character = _uiState.value.activeCharacter
+            )
         }
     }
 
@@ -489,11 +699,37 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         updateSpeechAndAutoSpeak(text, AvatarEmotion.TALKING)
     }
 
+    /**
+     * Previews a specific character's voice with their exact gender, persona, pitch, and speed
+     * without requiring the user to close the CharacterPickerDialog first.
+     */
+    fun previewCharacterVoice(character: PetCharacter) {
+        val sampleLine = when (character.id) {
+            "zayn" -> "Halo, aku Zayn. Suaraku suara cowok muda yang santai dan cool, kan? Bukan berarti aku pamer ya."
+            "siti" -> "Halo sayangku, ini suara lembut Siti. Siti siap menemani dan mendengarkan ceritamu dengan hangat."
+            "mochi" -> "Hai bestie! Ini suara ceria Mochi! Yuk kita ngobrol seru dan belajar bareng setiap hari!"
+            "rizky" -> "Siap komando! Ini suara bariton Rizky yang tegas, lugas, dan jelas! Siap membantu kapan saja!"
+            "jamal" -> "Yoo bro, ini suara kalem Jamal. Enaknya kita ngobrol santuy sambil rebahan aja nih."
+            else -> "Heh! Ini suara bass berat punya Heru si beruang! Mantap dan menggelegar banget kan?!"
+        }
+        _uiState.value = _uiState.value.copy(
+            lastAvatarSpeech = sampleLine,
+            currentEmotion = AvatarEmotion.TALKING
+        )
+        ttsEngine.speak(
+            text = sampleLine,
+            pitch = character.defaultVoicePitch,
+            rate = character.defaultSpeechRate,
+            character = character
+        )
+    }
+
     fun updateCustomization(newCustomization: AvatarCustomization) {
         val old = _uiState.value.customization
         val char = _uiState.value.activeCharacter
         val lang = _uiState.value.selectedLanguage
         _uiState.value = _uiState.value.copy(customization = newCustomization)
+        persistCurrentState()
 
         val reactionText = when {
             newCustomization.costume != old.costume ->
@@ -506,6 +742,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 when (char.id) {
                     "zayn" -> "Hmph! Ruangan ${newCustomization.roomTheme.displayName}? Baguslah, lumayan nyaman."
                     "siti" -> "Ruangan ${newCustomization.roomTheme.displayName} ini sangat indah dan damai sayang."
+                    "mochi" -> "Waaah ruangan ${newCustomization.roomTheme.displayName} ini estetik banget bestie!"
                     "rizky" -> "Lokasi pangkalan ${newCustomization.roomTheme.displayName} telah siap beroperasi!"
                     "jamal" -> "Ruangan baru? Yang penting kasurnya empuk buat rebahan."
                     else -> "Ruangan ${newCustomization.roomTheme.displayName}? Jangan sampai berantakan, awas lu!"
@@ -519,76 +756,157 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun selectCharacter(character: PetCharacter) {
+        // Save the outgoing character's state before switching
+        persistCurrentState()
         ttsEngine.stop()
-        ttsEngine.setVoiceProfile(character.defaultVoicePitch, character.defaultSpeechRate)
 
-        _uiState.value = _uiState.value.copy(
-            activeCharacter = character,
-            voicePitch = character.defaultVoicePitch,
-            speechRate = character.defaultSpeechRate,
-            customization = _uiState.value.customization.copy(
-                furColor = character.defaultFurColor,
-                earStyle = if (character.species == PetSpecies.DOG) com.example.model.EarStyle.DOG_FLOPPY else com.example.model.EarStyle.CAT_POINTY
+        viewModelScope.launch {
+            val savedCharEntity = try {
+                characterStateManager.getOrCreateCharacterCustomization(character)
+            } catch (e: Exception) {
+                null
+            }
+            val restoredCustomization = savedCharEntity?.toAvatarCustomization(character)
+                ?: _uiState.value.customization.copy(
+                    furColor = character.defaultFurColor,
+                    earStyle = if (character.species == PetSpecies.DOG) com.example.model.EarStyle.DOG_FLOPPY else com.example.model.EarStyle.CAT_POINTY
+                )
+            val restoredPitch = savedCharEntity?.voicePitch ?: character.defaultVoicePitch
+            val restoredRate = savedCharEntity?.speechRate ?: character.defaultSpeechRate
+
+            ttsEngine.setVoiceProfile(restoredPitch, restoredRate, character)
+
+            _uiState.value = _uiState.value.copy(
+                activeCharacter = character,
+                voicePitch = restoredPitch,
+                speechRate = restoredRate,
+                affectionScore = savedCharEntity?.affectionScore ?: _uiState.value.affectionScore,
+                hungerLevel = savedCharEntity?.hungerLevel ?: _uiState.value.hungerLevel,
+                toiletLevel = savedCharEntity?.toiletLevel ?: _uiState.value.toiletLevel,
+                energyLevel = savedCharEntity?.energyLevel ?: _uiState.value.energyLevel,
+                funLevel = savedCharEntity?.funLevel ?: _uiState.value.funLevel,
+                customization = restoredCustomization
             )
-        )
-
-        deliverGreeting(character, _uiState.value.selectedLanguage)
+            persistCurrentState()
+            deliverGreeting(character, _uiState.value.selectedLanguage)
+        }
     }
 
     fun setLanguage(language: AppLanguage) {
         _uiState.value = _uiState.value.copy(selectedLanguage = language)
         ttsEngine.setLanguage(language)
+        persistCurrentState()
         deliverGreeting(_uiState.value.activeCharacter, language)
     }
 
     fun setVoicePitch(pitch: Float) {
         _uiState.value = _uiState.value.copy(voicePitch = pitch)
-        ttsEngine.setVoiceProfile(pitch, _uiState.value.speechRate)
+        ttsEngine.setVoiceProfile(pitch, _uiState.value.speechRate, _uiState.value.activeCharacter)
+        persistCurrentState()
     }
 
     fun setSpeechRate(rate: Float) {
         _uiState.value = _uiState.value.copy(speechRate = rate)
-        ttsEngine.setVoiceProfile(_uiState.value.voicePitch, rate)
+        ttsEngine.setVoiceProfile(_uiState.value.voicePitch, rate, _uiState.value.activeCharacter)
+        persistCurrentState()
     }
 
     fun testVoice() {
+        val char = _uiState.value.activeCharacter
         val testPhrase = when (_uiState.value.selectedLanguage) {
-            AppLanguage.INDONESIAN -> "Halo! Suaraku terdengar bagus dan jernih, kan?"
-            AppLanguage.ENGLISH -> "Hello! My voice sounds crisp and friendly, right?"
-            AppLanguage.JAPANESE -> "こんにちは！私の声は聞こえますか？"
-            AppLanguage.SPANISH -> "¡Hola! Mi voz se escucha muy bien, ¿verdad?"
+            AppLanguage.INDONESIAN -> "Halo, ini suara ${char.name} dengan gaya ${char.voicePersona.displayName}. Terdengar natural dan jernih, kan?"
+            AppLanguage.ENGLISH -> "Hello! This is ${char.name}'s natural voice. It sounds clear and lifelike, right?"
+            AppLanguage.JAPANESE -> "こんにちは！${char.name}の自然な声です。きれいに聞こえますか？"
+            AppLanguage.SPANISH -> "¡Hola! Esta es la voz natural de ${char.name}. ¿Verdad que suena genial?"
         }
         updateSpeechAndAutoSpeak(testPhrase, AvatarEmotion.HAPPY)
     }
 
     fun clearHistory() {
         _uiState.value = _uiState.value.copy(messages = emptyList())
+        viewModelScope.launch {
+            try {
+                characterStateManager.clearChatHistory()
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Error clearing Room chat history: ${e.message}", e)
+            }
+        }
     }
 
-    fun getCustomApiKey(): String = aiService.getCustomApiKey()
-    fun setCustomApiKey(key: String) = aiService.setCustomApiKey(key)
-    fun isGeminiConnected(): Boolean = aiService.getEffectiveApiKey().isNotBlank()
+    fun getCustomApiKey(): String = aiService.getEffectiveApiKey()
+    fun setCustomApiKey(key: String) {
+        val trimmed = key.trim()
+        aiService.setCustomApiKey(trimmed)
+        ttsEngine.googleApiKey = getGoogleCloudTtsApiKey()
+        if (trimmed.isNotBlank()) {
+            testVoice()
+        }
+    }
+    fun isGeminiConnected(): Boolean = aiService.isGeminiConnected()
 
     fun getVoiceEngineMode(): VoiceEngineMode {
-        val name = prefs.getString("voice_engine_mode", VoiceEngineMode.CARTOON_MIMIC.name)
+        val defaultMode = if (getElevenLabsApiKey().isNotBlank()) {
+            VoiceEngineMode.ELEVENLABS_NEURAL
+        } else {
+            VoiceEngineMode.GEMINI_NATURAL
+        }
+        val name = prefs.getString("voice_engine_mode_v3", defaultMode.name)
         return try {
-            VoiceEngineMode.valueOf(name ?: VoiceEngineMode.CARTOON_MIMIC.name)
+            VoiceEngineMode.valueOf(name ?: defaultMode.name)
         } catch (e: Exception) {
-            VoiceEngineMode.CARTOON_MIMIC
+            defaultMode
         }
     }
 
     fun setVoiceEngineMode(mode: VoiceEngineMode) {
-        prefs.edit().putString("voice_engine_mode", mode.name).apply()
+        prefs.edit().putString("voice_engine_mode_v3", mode.name).apply()
         _uiState.value = _uiState.value.copy(voiceEngineMode = mode)
         ttsEngine.engineMode = mode
+        persistCurrentState()
     }
 
-    fun getElevenLabsApiKey(): String = prefs.getString("elevenlabs_api_key", "") ?: ""
+    private fun isValidElevenLabsSecret(candidate: String): Boolean {
+        val trimmed = candidate.trim()
+        return trimmed.isNotBlank() &&
+            !trimmed.startsWith("MY_") &&
+            !trimmed.contains("DEFAULT_VALUE") &&
+            trimmed != "YOUR_API_KEY" &&
+            trimmed != "null"
+    }
+
+    fun getElevenLabsApiKey(): String {
+        val custom = (prefs.getString("elevenlabs_api_key", "") ?: "").trim()
+        if (isValidElevenLabsSecret(custom)) return custom
+
+        val secretCandidates = listOf(
+            BuildConfig.ELEVENLABS_API_KEY,
+            BuildConfig.ELEVEN_LABS_API_KEY,
+            BuildConfig.XI_API_KEY,
+            BuildConfig.ELEVENLABS_KEY
+        )
+        for (secret in secretCandidates) {
+            if (isValidElevenLabsSecret(secret)) {
+                return secret.trim()
+            }
+        }
+
+        // Fallback if the user placed an ElevenLabs sk_... key inside GEMINI_API_KEY in Secrets
+        val geminiSecret = BuildConfig.GEMINI_API_KEY.trim()
+        if (geminiSecret.startsWith("sk_") && isValidElevenLabsSecret(geminiSecret)) {
+            return geminiSecret
+        }
+
+        return ""
+    }
+
     fun setElevenLabsApiKey(key: String) {
         val trimmed = key.trim()
         prefs.edit().putString("elevenlabs_api_key", trimmed).apply()
-        ttsEngine.elevenLabsApiKey = trimmed
+        ttsEngine.elevenLabsApiKey = getElevenLabsApiKey()
+        if (ttsEngine.elevenLabsApiKey.isNotBlank()) {
+            setVoiceEngineMode(VoiceEngineMode.ELEVENLABS_NEURAL)
+            testVoice()
+        }
     }
 
     fun getGoogleCloudTtsApiKey(): String {
@@ -601,6 +919,9 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         val trimmed = key.trim()
         prefs.edit().putString("google_cloud_tts_api_key", trimmed).apply()
         ttsEngine.googleApiKey = if (trimmed.isNotBlank()) trimmed else aiService.getEffectiveApiKey()
+        if (trimmed.isNotBlank()) {
+            testVoice()
+        }
     }
 
     fun startFaceToFaceCall() {
@@ -611,11 +932,12 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         val char = _uiState.value.activeCharacter
         val openingLine = when (char.id) {
-            "zayn" -> "Hah?! Ngapain kamu video call ke aku?! B-bukan berarti aku seneng ya! Mau ngomong apa, cepetan?!"
+            "zayn" -> "Hah? Ngapain kamu video call ke aku? Bukan berarti aku seneng ya, mau ngomong apa cepetan?"
             "siti" -> "Halo sayangku manis, Siti senang sekali bisa tatap muka langsung sama kamu. Ada cerita apa hari ini sayang?"
+            "mochi" -> "Hai bestie! Asik banget kita bisa teleponan tatap muka gini! Mau cerita apa nih ke Mochi?"
             "rizky" -> "Panggilan tatap muka terhubung! Sersan Rizky siap bertugas dan mendengarkan laporanmu. Silakan bicara!"
-            "jamal" -> "Hoaaam... Video call segala bro, Jamal lagi pw rebahan nih. Yaudah mau ngobrolin apa santai aja..."
-            else -> "HEH! Nelpon-nelpon gua lu! Awas aja kalau gak penting gua cakar! Ngomong sekarang lu mau apa?!"
+            "jamal" -> "Hoaam, video call segala bro, Jamal lagi enak rebahan nih. Yaudah mau ngobrolin apa santai aja."
+            else -> "Heh! Nelpon-nelpon gua lu! Mau ngobrol apa nih sama beruang keren kayak Heru?"
         }
 
         _uiState.value = _uiState.value.copy(
@@ -644,7 +966,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
 
         // Deliver spoken opening line
         ttsEngine.playHappyChime()
-        ttsEngine.speak(openingLine, _uiState.value.voicePitch, _uiState.value.speechRate)
+        ttsEngine.speak(openingLine, _uiState.value.voicePitch, _uiState.value.speechRate, char)
     }
 
     fun endFaceToFaceCall() {
@@ -709,18 +1031,42 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         )
 
         viewModelScope.launch {
+            var spokenFirstSentencePrefix: String? = null
             try {
-                val reply = withTimeoutOrNull(9000L) {
-                    aiService.generateReply(
+                val reply = withTimeoutOrNull(28_000L) {
+                    aiService.generateReplyStream(
                         userMessage = cleanText,
                         character = state.activeCharacter,
                         language = state.selectedLanguage,
-                        history = updatedMessages
+                        history = updatedMessages,
+                        onPartialText = { partialText ->
+                            _uiState.value = _uiState.value.copy(
+                                liveAvatarSpeech = partialText,
+                                lastAvatarSpeech = partialText,
+                                faceToFaceCallState = FaceToFaceCallState.SPEAKING
+                            )
+
+                            if (!ttsEngine.hasCloudNeuralKey() && spokenFirstSentencePrefix == null && partialText.length >= 16) {
+                                val clauses = ttsEngine.splitIntoNaturalClauses(partialText)
+                                if (clauses.size >= 2 && clauses.first().length >= 10) {
+                                    val firstSentence = clauses.first()
+                                    spokenFirstSentencePrefix = firstSentence
+                                    ttsEngine.speakStreamedSentence(
+                                        sentenceText = firstSentence,
+                                        pitch = _uiState.value.voicePitch,
+                                        rate = _uiState.value.speechRate,
+                                        character = state.activeCharacter,
+                                        flushQueue = true
+                                    )
+                                }
+                            }
+                        }
                     )
                 } ?: aiService.getFastFallbackReply(
                     userMessage = cleanText,
                     character = state.activeCharacter,
-                    language = state.selectedLanguage
+                    language = state.selectedLanguage,
+                    history = updatedMessages
                 )
 
                 val avatarReplyMsg = ChatMessage(
@@ -740,8 +1086,23 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     faceToFaceCallState = FaceToFaceCallState.SPEAKING,
                     affectionScore = newAffection
                 )
+                persistCurrentState()
 
-                ttsEngine.speak(reply.text, _uiState.value.voicePitch, _uiState.value.speechRate)
+                val alreadySpoken = spokenFirstSentencePrefix
+                if (alreadySpoken != null && reply.text.startsWith(alreadySpoken)) {
+                    val remaining = reply.text.removePrefix(alreadySpoken).trim()
+                    if (remaining.isNotBlank()) {
+                        ttsEngine.speakStreamedSentence(
+                            sentenceText = remaining,
+                            pitch = _uiState.value.voicePitch,
+                            rate = _uiState.value.speechRate,
+                            character = state.activeCharacter,
+                            flushQueue = false
+                        )
+                    }
+                } else {
+                    ttsEngine.speak(reply.text, _uiState.value.voicePitch, _uiState.value.speechRate, state.activeCharacter)
+                }
             } catch (e: TimeoutCancellationException) {
                 Log.d("AvatarViewModel", "Face-to-face AI timeout: ${e.message}, using fallback")
                 val fallbackReply = aiService.getFastFallbackReply(
@@ -755,7 +1116,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     currentEmotion = fallbackReply.emotion,
                     faceToFaceCallState = FaceToFaceCallState.SPEAKING
                 )
-                ttsEngine.speak(fallbackReply.text, _uiState.value.voicePitch, _uiState.value.speechRate)
+                ttsEngine.speak(fallbackReply.text, _uiState.value.voicePitch, _uiState.value.speechRate, state.activeCharacter)
             } catch (e: Exception) {
                 Log.e("AvatarViewModel", "Error in handleFaceToFaceUserUtterance: ${e.message}", e)
                 val fallbackReply = aiService.getFastFallbackReply(
@@ -769,7 +1130,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                     currentEmotion = fallbackReply.emotion,
                     faceToFaceCallState = FaceToFaceCallState.SPEAKING
                 )
-                ttsEngine.speak(fallbackReply.text, _uiState.value.voicePitch, _uiState.value.speechRate)
+                ttsEngine.speak(fallbackReply.text, _uiState.value.voicePitch, _uiState.value.speechRate, state.activeCharacter)
             }
         }
     }
@@ -779,34 +1140,48 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
     }
 
     fun switchCharacterInFaceToFace(character: PetCharacter) {
+        persistCurrentState()
         ttsEngine.stop()
         speechRecognitionHelper.stopListening()
         autoListenJob?.cancel()
 
-        ttsEngine.setVoiceProfile(character.defaultVoicePitch, character.defaultSpeechRate)
+        viewModelScope.launch {
+            val savedCharEntity = try {
+                characterStateManager.getOrCreateCharacterCustomization(character)
+            } catch (e: Exception) {
+                null
+            }
+            val restoredCustomization = savedCharEntity?.toAvatarCustomization(character)
+                ?: _uiState.value.customization.copy(
+                    furColor = character.defaultFurColor,
+                    earStyle = if (character.species == PetSpecies.DOG) com.example.model.EarStyle.DOG_FLOPPY else com.example.model.EarStyle.CAT_POINTY
+                )
+            val restoredPitch = savedCharEntity?.voicePitch ?: character.defaultVoicePitch
+            val restoredRate = savedCharEntity?.speechRate ?: character.defaultSpeechRate
 
-        val greeting = when (character.id) {
-            "zayn" -> "Hmph! Sekarang kamu ngobrol sama Zayn! Jangan mikir aneh-aneh ya!"
-            "siti" -> "Halo sayang, Siti hadir di sini untukmu. Siti siap mendengarkan."
-            "rizky" -> "Pergantian personel! Sersan Rizky mengambil alih komunikasi!"
-            "jamal" -> "Yoo, sekarang giliran Jamal. Santai aja ya ngobrolnya..."
-            else -> "SEKARANG GUA HERU YANG HADEPIN LU! Mau ngomong apa lu?!"
-        }
+            ttsEngine.setVoiceProfile(restoredPitch, restoredRate, character)
 
-        _uiState.value = _uiState.value.copy(
-            activeCharacter = character,
-            voicePitch = character.defaultVoicePitch,
-            speechRate = character.defaultSpeechRate,
-            liveAvatarSpeech = greeting,
-            lastAvatarSpeech = greeting,
-            faceToFaceCallState = FaceToFaceCallState.SPEAKING,
-            customization = _uiState.value.customization.copy(
-                furColor = character.defaultFurColor,
-                earStyle = if (character.species == PetSpecies.DOG) com.example.model.EarStyle.DOG_FLOPPY else com.example.model.EarStyle.CAT_POINTY
+            val greeting = when (character.id) {
+                "zayn" -> "Hmph! Sekarang kamu ngobrol sama Zayn! Jangan mikir aneh-aneh ya!"
+                "siti" -> "Halo sayang, Siti hadir di sini untukmu. Siti siap mendengarkan."
+                "mochi" -> "Hai bestie! Sekarang giliran Mochi yang ngobrol bareng kamu nih!"
+                "rizky" -> "Pergantian personel! Sersan Rizky mengambil alih komunikasi!"
+                "jamal" -> "Yoo, sekarang giliran Jamal. Santai aja ya ngobrolnya."
+                else -> "Sekarang gua Heru yang nemenin lu ngobrol! Mau bahas apa nih kita?"
+            }
+
+            _uiState.value = _uiState.value.copy(
+                activeCharacter = character,
+                voicePitch = restoredPitch,
+                speechRate = restoredRate,
+                liveAvatarSpeech = greeting,
+                lastAvatarSpeech = greeting,
+                faceToFaceCallState = FaceToFaceCallState.SPEAKING,
+                customization = restoredCustomization
             )
-        )
-
-        ttsEngine.speak(greeting, character.defaultVoicePitch, character.defaultSpeechRate)
+            persistCurrentState()
+            ttsEngine.speak(greeting, restoredPitch, restoredRate, character)
+        }
     }
 
     private fun onAvatarFinishedSpeakingInCall() {
@@ -860,6 +1235,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             lastAvatarSpeech = foodLine,
             careFeedbackMessage = "+${(food.hungerRestore * 100).toInt()}% Kenyang! 😋"
         )
+        persistCurrentState()
 
         speakText(foodLine)
     }
@@ -888,6 +1264,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 lastAvatarSpeech = "Aaaah lega dan bersih banget! Sekarang Tom siap beraktivitas lagi!",
                 careFeedbackMessage = "Toilet Bersih 100%! +15 Koin ✨"
             )
+            persistCurrentState()
             speakText("Aaaah lega dan bersih banget! Sekarang Tom siap beraktivitas lagi!")
             delay(2000)
             closeCareOverlay()
@@ -910,6 +1287,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
                 lastAvatarSpeech = "Hoaaaam! Bangun tidur segar banget! Ayo kita main lagi!",
                 careFeedbackMessage = "Energi Pulih 100%! ⚡"
             )
+            persistCurrentState()
             speakText("Hoaaaam! Bangun tidur segar banget! Ayo kita main lagi!")
         } else {
             // Go to sleep
@@ -940,6 +1318,7 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
             currentEmotion = AvatarEmotion.HAPPY,
             careFeedbackMessage = "Mantap! Pantulan ke-$newScore (+10 Koin) ⚽"
         )
+        persistCurrentState()
     }
 
     fun toggleMimicMode() {
@@ -991,23 +1370,41 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         val subject = _uiState.value.homeworkSubject
         val char = _uiState.value.activeCharacter
         val lang = _uiState.value.selectedLanguage
+        val photoBitmap = _uiState.value.homeworkPhotoBitmap
 
-        if (q.isBlank() && _uiState.value.homeworkPhotoBitmap == null) return
+        if (q.isBlank() && photoBitmap == null) return
 
-        _uiState.value = _uiState.value.copy(isSolvingHomework = true)
+        _uiState.value = _uiState.value.copy(
+            isSolvingHomework = true,
+            lastAvatarSpeech = "Bentar ya, ${char.name} lagi ngitung dan bedah soalnya secara kilat..."
+        )
 
         viewModelScope.launch {
             try {
-                // Resolves via Live Gemini 2.0 Flash AI or high-precision deterministic solver
-                val solution = withTimeoutOrNull(9000L) {
-                    aiService.generateHomeworkHelp(subject, q, char, lang)
-                } ?: aiService.solveHomeworkDeterministically(subject, q, char)
+                // 1. If a photo is attached, use Multimodal Vision (Firebase AI Logic)
+                val solution = if (photoBitmap != null) {
+                    studyCompanionHelper.analyzeHomeworkWithVision(
+                        subject = subject,
+                        questionText = q,
+                        photoBitmap = photoBitmap,
+                        character = char
+                    ) ?: aiService.solveHomeworkDeterministically(subject, q, char)
+                } else {
+                    withTimeoutOrNull(35_000L) {
+                        aiService.generateHomeworkHelp(subject, q, char, lang)
+                    } ?: aiService.solveHomeworkDeterministically(subject, q, char)
+                }
+
+                val updatedCoins = _uiState.value.coins + 15
+                prefs.edit().putInt("saved_petto_coins", updatedCoins).apply()
 
                 _uiState.value = _uiState.value.copy(
                     isSolvingHomework = false,
                     homeworkSolution = solution,
+                    coins = updatedCoins,
                     currentEmotion = AvatarEmotion.TALKING
                 )
+                persistCurrentState()
                 val spokenSummary = "${char.name} sudah menemukan solusinya! ${solution.finalAnswer}. Simak langkah-langkahnya ya!"
                 speakText(spokenSummary)
             } catch (e: Exception) {
@@ -1025,8 +1422,467 @@ class AvatarViewModel(application: Application) : AndroidViewModel(application) 
         }
     }
 
+    // ========================================================
+    // FEATURE #2: 🎮 MINI-GAMES & KUIS CERDAS BARENG PET
+    // ========================================================
+
+    fun openQuizBattle() {
+        val char = _uiState.value.activeCharacter
+        val line = when (char.id) {
+            "zayn" -> "Hmph! Berani adu kuis cerdas sama aku?! Jangan nangis kalau salah ya, tapi kalau bener aku kasih +25 koin wkwk!"
+            "siti" -> "Yeay! Ayo kita main kuis cerdas bareng sayangku! Setiap jawaban bener dapet +25 koin bintang lho, hihi."
+            "rizky" -> "SIAP KOMANDAN! Simulasi Kuis Taktis dimulai! Jawab tepat sasaran untuk raih +25 koin per soal, gaspol!"
+            "jamal" -> "Main tebak-tebakan santuy bareng Jamal yuk bro... Lumayan dapet koin buat jajan makanan enak wkwk."
+            else -> "HEH! Ayo buktiin seberapa encer otak lu di kuis ini wkwk! Jawab bener gua kasih +25 koin!"
+        }
+        _uiState.value = _uiState.value.copy(
+            showQuizSheet = true,
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = line
+        )
+        speakText(line)
+    }
+
+    fun closeQuizBattle() {
+        _uiState.value = _uiState.value.copy(showQuizSheet = false)
+    }
+
+    fun answerQuizQuestion(question: QuizQuestion, selectedIndex: Int) {
+        val char = _uiState.value.activeCharacter
+        val isCorrect = selectedIndex == question.correctIndex
+        val reaction = QuizCatalog.getReactionForAnswer(isCorrect, char, question.funFact)
+
+        val newStreak = if (isCorrect) _uiState.value.quizStreak + 1 else 0
+        val coinReward = if (isCorrect) 25 else 5
+        val newCoins = _uiState.value.coins + coinReward
+        val newAffection = (_uiState.value.affectionScore + if (isCorrect) 5 else 1).coerceAtMost(100)
+        val newFun = (_uiState.value.funLevel + 0.12f).coerceAtMost(1.0f)
+
+        prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+
+        _uiState.value = _uiState.value.copy(
+            coins = newCoins,
+            quizStreak = newStreak,
+            affectionScore = newAffection,
+            funLevel = newFun,
+            currentEmotion = if (isCorrect) AvatarEmotion.HAPPY else AvatarEmotion.SURPRISED,
+            lastAvatarSpeech = reaction
+        )
+        persistCurrentState()
+        speakText(reaction)
+    }
+
+    // ========================================================
+    // FEATURE #3: ⏱️ POMODORO STUDY TIMER (TEMAN FOKUS)
+    // ========================================================
+
+    fun openPomodoroTimer() {
+        val char = _uiState.value.activeCharacter
+        val line = when (char.id) {
+            "zayn" -> "Hmph, mau fokus belajar pakai Pomodoro ya? Ya udah sini aku jagain timernya biar kamu nggak main HP terus!"
+            "siti" -> "Wah, ayo kita fokus belajar bareng pakai timer Pomodoro sayangku... Siti temenin dengan tenang di sini ya."
+            "rizky" -> "Siap Komandan! Timer Fokus Pomodoro siap diaktifkan! Disiplin waktu adalah kunci kesuksesan!"
+            "jamal" -> "Belajar pake timer Pomodoro paling pas bro: fokus bentar, terus istirahat rebahan santuy bareng Jamal wkwk."
+            else -> "Buka buku lu sekarang! Kita nyalain timer fokus Pomodoro biar PR lu cepet kelar dan dapet banyak koin!"
+        }
+        _uiState.value = _uiState.value.copy(
+            showPomodoroSheet = true,
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = line
+        )
+        speakText(line)
+    }
+
+    fun closePomodoroTimer() {
+        _uiState.value = _uiState.value.copy(showPomodoroSheet = false)
+    }
+
+    fun selectPomodoroPreset(preset: PomodoroPreset) {
+        pomodoroTimerJob?.cancel()
+        _uiState.value = _uiState.value.copy(
+            activePomodoroPreset = preset,
+            pomodoroRemainingSeconds = preset.durationMinutes * 60,
+            isPomodoroRunning = false
+        )
+    }
+
+    fun togglePomodoroStartPause() {
+        val currentlyRunning = _uiState.value.isPomodoroRunning
+        if (currentlyRunning) {
+            pomodoroTimerJob?.cancel()
+            _uiState.value = _uiState.value.copy(isPomodoroRunning = false)
+        } else {
+            _uiState.value = _uiState.value.copy(isPomodoroRunning = true)
+            pomodoroTimerJob?.cancel()
+            pomodoroTimerJob = viewModelScope.launch {
+                while (_uiState.value.isPomodoroRunning && _uiState.value.pomodoroRemainingSeconds > 0) {
+                    delay(1000L)
+                    val nextSec = (_uiState.value.pomodoroRemainingSeconds - 1).coerceAtLeast(0)
+                    _uiState.value = _uiState.value.copy(pomodoroRemainingSeconds = nextSec)
+                    if (nextSec == 0) {
+                        completePomodoroAndClaimReward()
+                        break
+                    }
+                }
+            }
+        }
+    }
+
+    fun resetPomodoroTimer() {
+        pomodoroTimerJob?.cancel()
+        val preset = _uiState.value.activePomodoroPreset
+        _uiState.value = _uiState.value.copy(
+            isPomodoroRunning = false,
+            pomodoroRemainingSeconds = preset.durationMinutes * 60
+        )
+    }
+
+    fun completePomodoroAndClaimReward() {
+        pomodoroTimerJob?.cancel()
+        val state = _uiState.value
+        val preset = state.activePomodoroPreset
+        val char = state.activeCharacter
+        val newCoins = state.coins + preset.rewardCoins
+        val newAffection = (state.affectionScore + preset.affectionReward).coerceAtMost(100)
+        val newSessions = state.pomodoroCompletedSessions + 1
+        val newProgress = state.levelProgress + 0.25f
+        val newLevel = if (newProgress >= 1f) state.playerLevel + 1 else state.playerLevel
+        val finalProgress = if (newProgress >= 1f) newProgress - 1f else newProgress
+
+        prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+
+        val congrats = when (char.id) {
+            "zayn" -> "Hmph! Sesi fokus ${preset.title} beres juga! Nih hadiah +${preset.rewardCoins} koin buat kamu. Keren banget sih kerja kerasmu, wkwk!"
+            "siti" -> "Yeay alhamdulillah! Sesi ${preset.title} selesai sayangku! Kamu hebat banget, ini hadiah +${preset.rewardCoins} koin bintang buatmu manis!"
+            "rizky" -> "MISI FOKUS TUNTAS KOMANDAN! Sesi ${preset.title} berhasil diselesaikan! Bonus +${preset.rewardCoins} koin telah ditambahkan!"
+            "jamal" -> "Mantap jiwa bro! Sesi ${preset.title} kelar tanpa stres, dapet +${preset.rewardCoins} koin pula! Saatnya kita rebahan santuy wkwk."
+            else -> "WUIH KELAR JUGA SESI FOKUS LU! Nih gua kasih +${preset.rewardCoins} koin karena lu udah rajin banget hari ini, gaspol!"
+        }
+
+        _uiState.value = state.copy(
+            isPomodoroRunning = false,
+            pomodoroRemainingSeconds = preset.durationMinutes * 60,
+            pomodoroCompletedSessions = newSessions,
+            coins = newCoins,
+            affectionScore = newAffection,
+            playerLevel = newLevel,
+            levelProgress = finalProgress,
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = congrats
+        )
+        persistCurrentState()
+        speakText(congrats)
+    }
+
+    // ========================================================
+    // FEATURE #4: 🍖 SISTEM RAWAT PET, MAKANAN FAVORIT & TOKO
+    // ========================================================
+
+    fun openPetCareShop() {
+        val char = _uiState.value.activeCharacter
+        val line = when (char.id) {
+            "zayn" -> "Hmph, mau traktir aku makanan enak ya? K-kalau ada Salmon Sashimi sih aku nggak bakal nolak wkwk!"
+            "siti" -> "Wah, ayo kita lihat makanan lezat dan aksesoris gemoy di toko sayangku... Siti suka banget Wortel Madu!"
+            "rizky" -> "Siap Komandan! Memasuki ruang logistik makanan dan perlengkapan taktis!"
+            "jamal" -> "Asyik makan-makan nih bro... Kalau ada Semangka Es Santuy sabi banget tuh buat temen rebahan wkwk."
+            else -> "HAH mau nraktir gua makan?! Sini beliin gua Madu Hutan Premium biar tenaga gua makin jos!"
+        }
+        _uiState.value = _uiState.value.copy(
+            showPetCareShopSheet = true,
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = line
+        )
+        speakText(line)
+    }
+
+    fun closePetCareShop() {
+        _uiState.value = _uiState.value.copy(showPetCareShopSheet = false)
+    }
+
+    fun feedSpecialFood(food: SpecialPetFood) {
+        val state = _uiState.value
+        if (state.coins < food.priceCoins) return
+        val char = state.activeCharacter
+        val isFav = food.favoriteCharacterId == char.id
+        val newCoins = (state.coins - food.priceCoins).coerceAtLeast(0)
+        val newHunger = (state.hungerLevel + food.hungerRestore).coerceAtMost(1.0f)
+        val affectionAdd = if (isFav) food.affectionBonus + 5 else food.affectionBonus
+        val newAffection = (state.affectionScore + affectionAdd).coerceAtMost(100)
+        val newProgress = state.levelProgress + 0.15f
+        val newLevel = if (newProgress >= 1f) state.playerLevel + 1 else state.playerLevel
+        val finalProgress = if (newProgress >= 1f) newProgress - 1f else newProgress
+
+        prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+
+        val reaction = SpecialPetFoodCatalog.getReactionForFood(food, char)
+        _uiState.value = state.copy(
+            coins = newCoins,
+            hungerLevel = newHunger,
+            affectionScore = newAffection,
+            playerLevel = newLevel,
+            levelProgress = finalProgress,
+            currentEmotion = AvatarEmotion.LOVING,
+            lastAvatarSpeech = reaction,
+            careFeedbackMessage = "${food.emoji} +${(food.hungerRestore * 100).toInt()}% Kenyang & +$affectionAdd% Sayang!"
+        )
+        persistCurrentState()
+        speakText(reaction)
+    }
+
+    fun equipAccessoryWithCoins(accessory: AccessoryStyle, cost: Int) {
+        val state = _uiState.value
+        if (state.coins < cost) return
+        val newCoins = (state.coins - cost).coerceAtLeast(0)
+        prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+
+        val char = state.activeCharacter
+        val line = "Wah, ${accessory.displayName} sudah terpasang! Gimana penampilan ${char.name}, makin keren dan gemoy kan wkwk!"
+        _uiState.value = state.copy(
+            coins = newCoins,
+            customization = state.customization.copy(accessory = accessory),
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = line,
+            careFeedbackMessage = "✨ ${accessory.displayName} Terpasang!"
+        )
+        persistCurrentState()
+        speakText(line)
+    }
+
+    fun equipCostumeWithCoins(costume: CostumeStyle, cost: Int) {
+        val state = _uiState.value
+        if (state.coins < cost) return
+        val newCoins = (state.coins - cost).coerceAtLeast(0)
+        prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+
+        val char = state.activeCharacter
+        val line = "Yeay! Kostum ${costume.displayName} sudah dipakai sama ${char.name}! Auto tampil kece badai nih!"
+        _uiState.value = state.copy(
+            coins = newCoins,
+            customization = state.customization.copy(costume = costume),
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = line,
+            careFeedbackMessage = "🧥 ${costume.displayName} Terpasang!"
+        )
+        persistCurrentState()
+        speakText(line)
+    }
+
+    // ========================================================
+    // FEATURE #5: 📓 JURNAL MOOD HARIAN & CURHAT TRACKER
+    // ========================================================
+
+    fun openMoodJournal() {
+        val char = _uiState.value.activeCharacter
+        val line = when (char.id) {
+            "zayn" -> "Hmph, gimana mood kamu hari ini? Tulis aja di jurnal, aku dengerin kok semua curhatan kamu... b-bukan berarti aku kepo ya!"
+            "siti" -> "Halo sayangku, gimana perasaanmu hari ini? Tulis di jurnal mood ya, Siti siap dengerin curhatanmu dengan penuh kasih sayang."
+            "rizky" -> "Siap Komandan! Silakan laporkan kondisi mood dan cerita harianmu di Jurnal Mood, Rizky siap mendengarkan!"
+            "jamal" -> "Lagi seneng, santuy, atau lagi capek nih bro? Spill aja di jurnal mood, Jamal siap jadi temen curhat paling santuy wkwk."
+            else -> "HEH bestie! Gimana hari lu? Lagi happy atau ada yang bikin kesel? Sini spill di jurnal mood ke gua!"
+        }
+        _uiState.value = _uiState.value.copy(
+            showMoodJournalSheet = true,
+            currentEmotion = AvatarEmotion.HAPPY,
+            lastAvatarSpeech = line
+        )
+        speakText(line)
+    }
+
+    fun closeMoodJournal() {
+        _uiState.value = _uiState.value.copy(showMoodJournalSheet = false)
+    }
+
+    fun submitMoodJournalEntry(mood: MoodType, userNote: String) {
+        val state = _uiState.value
+        val char = state.activeCharacter
+        _uiState.value = state.copy(isSavingMoodEntry = true)
+
+        viewModelScope.launch {
+            try {
+                val petResponse = studyCompanionHelper.generateMoodCurhatResponse(
+                    mood = mood,
+                    userNote = userNote,
+                    character = char
+                )
+                val sdf = SimpleDateFormat("dd MMM, HH:mm", Locale.getDefault())
+                val entry = MoodJournalEntry(
+                    id = UUID.randomUUID().toString(),
+                    timestampMillis = System.currentTimeMillis(),
+                    formattedDate = sdf.format(Date()),
+                    mood = mood,
+                    userNote = userNote.trim().ifBlank { "Mood hari ini: ${mood.label}" },
+                    characterName = char.name,
+                    characterEmoji = char.species.emoji,
+                    petResponse = petResponse
+                )
+
+                val updatedEntries = listOf(entry) + _uiState.value.moodJournalEntries
+                val newCoins = _uiState.value.coins + 20
+                val newAffection = (_uiState.value.affectionScore + 6).coerceAtMost(100)
+
+                saveMoodEntriesToPrefs(updatedEntries)
+                prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+
+                _uiState.value = _uiState.value.copy(
+                    isSavingMoodEntry = false,
+                    moodJournalEntries = updatedEntries,
+                    coins = newCoins,
+                    affectionScore = newAffection,
+                    currentEmotion = AvatarEmotion.LOVING,
+                    lastAvatarSpeech = petResponse
+                )
+                persistCurrentState()
+                speakText(petResponse)
+            } catch (e: Exception) {
+                Log.e("AvatarViewModel", "Error saving mood entry: ${e.message}", e)
+                _uiState.value = _uiState.value.copy(isSavingMoodEntry = false)
+            }
+        }
+    }
+
+    private fun saveMoodEntriesToPrefs(entries: List<MoodJournalEntry>) {
+        try {
+            val arr = JSONArray()
+            entries.take(30).forEach { item ->
+                arr.put(JSONObject().apply {
+                    put("id", item.id)
+                    put("timestampMillis", item.timestampMillis)
+                    put("formattedDate", item.formattedDate)
+                    put("moodId", item.mood.id)
+                    put("userNote", item.userNote)
+                    put("characterName", item.characterName)
+                    put("characterEmoji", item.characterEmoji)
+                    put("petResponse", item.petResponse)
+                })
+            }
+            prefs.edit().putString("saved_mood_journal_entries", arr.toString()).apply()
+        } catch (e: Exception) {
+            Log.d("AvatarViewModel", "Failed to save mood entries: ${e.message}")
+        }
+    }
+
+    private fun loadMoodEntriesFromPrefs(): List<MoodJournalEntry> {
+        return try {
+            val raw = prefs.getString("saved_mood_journal_entries", null) ?: return emptyList()
+            val arr = JSONArray(raw)
+            val list = mutableListOf<MoodJournalEntry>()
+            for (i in 0 until arr.length()) {
+                val obj = arr.getJSONObject(i)
+                val moodId = obj.optString("moodId", "senang")
+                val mood = MoodType.values().firstOrNull { it.id == moodId } ?: MoodType.SENANG
+                list.add(
+                    MoodJournalEntry(
+                        id = obj.optString("id"),
+                        timestampMillis = obj.optLong("timestampMillis"),
+                        formattedDate = obj.optString("formattedDate"),
+                        mood = mood,
+                        userNote = obj.optString("userNote"),
+                        characterName = obj.optString("characterName", "Petto"),
+                        characterEmoji = obj.optString("characterEmoji", "🐾"),
+                        petResponse = obj.optString("petResponse")
+                    )
+                )
+            }
+            list
+        } catch (e: Exception) {
+            emptyList()
+        }
+    }
+
+    // ========================================================
+    // FEATURE #6: 🃏 FLASHCARD OTOMATIS DARI MATERI SEKOLAH
+    // ========================================================
+
+    fun openFlashcardStudy(customTopic: String? = null) {
+        val state = _uiState.value
+        val char = state.activeCharacter
+        val subj = state.homeworkSubject
+        val initialCards = FlashcardCatalog.getDefaultDeck(subj)
+
+        _uiState.value = state.copy(
+            showFlashcardSheet = true,
+            showHomeworkMode = false,
+            flashcards = if (state.flashcards.isEmpty()) initialCards else state.flashcards,
+            currentEmotion = AvatarEmotion.HAPPY
+        )
+
+        if (!customTopic.isNullOrBlank()) {
+            generateFlashcards(customTopic)
+        } else {
+            val line = "Ayo kita hafalin materi $subj pakai kartu Flashcard pintar bareng ${char.name}! Ketuk kartunya buat membalik jawaban ya!"
+            _uiState.value = _uiState.value.copy(lastAvatarSpeech = line)
+            speakText(line)
+        }
+    }
+
+    fun closeFlashcardStudy() {
+        _uiState.value = _uiState.value.copy(showFlashcardSheet = false)
+    }
+
+    fun selectFlashcardSubject(subject: String) {
+        _uiState.value = _uiState.value.copy(
+            homeworkSubject = subject,
+            flashcards = FlashcardCatalog.getDefaultDeck(subject)
+        )
+    }
+
+    fun generateFlashcards(customTopic: String) {
+        val state = _uiState.value
+        val subject = state.homeworkSubject
+        val char = state.activeCharacter
+
+        _uiState.value = state.copy(isGeneratingFlashcards = true)
+
+        viewModelScope.launch {
+            try {
+                val generated = studyCompanionHelper.generateFlashcardsForTopic(
+                    subject = subject,
+                    customTopic = customTopic,
+                    character = char
+                )
+                val line = "${char.name} udah buatin ${generated.size} kartu Flashcard tentang ${customTopic.ifBlank { subject }}! Yuk kita hafalin bareng!"
+                _uiState.value = _uiState.value.copy(
+                    isGeneratingFlashcards = false,
+                    flashcards = generated,
+                    lastAvatarSpeech = line,
+                    currentEmotion = AvatarEmotion.HAPPY
+                )
+                speakText(line)
+            } catch (e: Exception) {
+                _uiState.value = _uiState.value.copy(
+                    isGeneratingFlashcards = false,
+                    flashcards = FlashcardCatalog.getDefaultDeck(subject)
+                )
+            }
+        }
+    }
+
+    fun markFlashcardMastered(cardId: String) {
+        val state = _uiState.value
+        var newlyMastered = false
+        val updated = state.flashcards.map { card ->
+            if (card.id == cardId) {
+                if (!card.isMastered) newlyMastered = true
+                card.copy(isMastered = true)
+            } else {
+                card
+            }
+        }
+        val newCoins = if (newlyMastered) state.coins + 10 else state.coins
+        if (newlyMastered) {
+            prefs.edit().putInt("saved_petto_coins", newCoins).apply()
+        }
+        _uiState.value = state.copy(
+            flashcards = updated,
+            coins = newCoins,
+            affectionScore = (state.affectionScore + if (newlyMastered) 2 else 0).coerceAtMost(100)
+        )
+        persistCurrentState()
+    }
+
     override fun onCleared() {
         super.onCleared()
+        pomodoroTimerJob?.cancel()
         ttsEngine.release()
         speechRecognitionHelper.destroy()
     }

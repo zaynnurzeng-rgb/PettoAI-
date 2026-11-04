@@ -12,6 +12,112 @@ enum class PetSpecies(val displayName: String, val emoji: String, val imageRes: 
     BEAR("Beruang", "🐻", R.drawable.img_char_talking_bear)
 }
 
+enum class CharacterGender(
+    val displayName: String,
+    val shortLabel: String,
+    val symbol: String
+) {
+    MALE("Laki-laki", "Cowok", "♂️"),
+    FEMALE("Perempuan", "Cewek", "♀️")
+}
+
+/**
+ * Distinct Gemini Live & Neural voice personas so every character has a unique vocal timbre,
+ * gender identity, natural human pitch/tempo, and cloud/on-device voice routing.
+ */
+enum class GeminiVoicePersona(
+    val geminiVoiceName: String,
+    val displayName: String,
+    val gender: CharacterGender,
+    val timbreDescription: String,
+    val idCloudVoiceName: String,
+    val enCloudVoiceName: String,
+    val jaCloudVoiceName: String,
+    val esCloudVoiceName: String,
+    val naturalPitch: Float,
+    val naturalRate: Float,
+    val voiceVariantIndex: Int
+) {
+    PUCK(
+        geminiVoiceName = "Puck",
+        displayName = "Gemini Puck • Tenor Remaja",
+        gender = CharacterGender.MALE,
+        timbreDescription = "Suara cowok muda ekspresif, agak cool & santai",
+        idCloudVoiceName = "id-ID-Wavenet-B",
+        enCloudVoiceName = "en-US-Journey-D",
+        jaCloudVoiceName = "ja-JP-Neural2-C",
+        esCloudVoiceName = "es-ES-Neural2-B",
+        naturalPitch = 0.96f,
+        naturalRate = 1.04f,
+        voiceVariantIndex = 0
+    ),
+    AOEDE(
+        geminiVoiceName = "Aoede",
+        displayName = "Gemini Aoede • Soprano Lembut",
+        gender = CharacterGender.FEMALE,
+        timbreDescription = "Suara cewek lembut, hangat, halus & penuh kasih sayang",
+        idCloudVoiceName = "id-ID-Neural2-A",
+        enCloudVoiceName = "en-US-Journey-F",
+        jaCloudVoiceName = "ja-JP-Neural2-B",
+        esCloudVoiceName = "es-ES-Neural2-A",
+        naturalPitch = 1.12f,
+        naturalRate = 0.97f,
+        voiceVariantIndex = 0
+    ),
+    KORE(
+        geminiVoiceName = "Kore",
+        displayName = "Gemini Kore • Alto Ceria",
+        gender = CharacterGender.FEMALE,
+        timbreDescription = "Suara cewek ceria, lincah, ramah & ekspresif",
+        idCloudVoiceName = "id-ID-Wavenet-D",
+        enCloudVoiceName = "en-US-Journey-O",
+        jaCloudVoiceName = "ja-JP-Wavenet-A",
+        esCloudVoiceName = "es-ES-Wavenet-C",
+        naturalPitch = 1.22f,
+        naturalRate = 1.06f,
+        voiceVariantIndex = 1
+    ),
+    CHARON(
+        geminiVoiceName = "Charon",
+        displayName = "Gemini Charon • Bariton Tegas",
+        gender = CharacterGender.MALE,
+        timbreDescription = "Suara cowok dewasa tegas, jernih & berwibawa",
+        idCloudVoiceName = "id-ID-Neural2-B",
+        enCloudVoiceName = "en-US-Neural2-D",
+        jaCloudVoiceName = "ja-JP-Neural2-D",
+        esCloudVoiceName = "es-ES-Neural2-F",
+        naturalPitch = 0.85f,
+        naturalRate = 1.05f,
+        voiceVariantIndex = 1
+    ),
+    ORUS(
+        geminiVoiceName = "Orus",
+        displayName = "Gemini Orus • Deep Chill",
+        gender = CharacterGender.MALE,
+        timbreDescription = "Suara cowok kalem, adem, santuy & agak rendah",
+        idCloudVoiceName = "id-ID-Wavenet-C",
+        enCloudVoiceName = "en-US-Neural2-J",
+        jaCloudVoiceName = "ja-JP-Wavenet-C",
+        esCloudVoiceName = "es-ES-Wavenet-B",
+        naturalPitch = 0.76f,
+        naturalRate = 0.90f,
+        voiceVariantIndex = 2
+    ),
+    FENRIR(
+        geminiVoiceName = "Fenrir",
+        displayName = "Gemini Fenrir • Bass Berat",
+        gender = CharacterGender.MALE,
+        timbreDescription = "Suara cowok bass berat, serak sangar & menggelegar",
+        idCloudVoiceName = "id-ID-Wavenet-C",
+        enCloudVoiceName = "en-US-Neural2-A",
+        jaCloudVoiceName = "ja-JP-Wavenet-D",
+        esCloudVoiceName = "es-ES-Wavenet-B",
+        naturalPitch = 0.65f,
+        naturalRate = 1.02f,
+        voiceVariantIndex = 3
+    )
+}
+
 enum class TouchZone(val id: String, val displayName: String, val emoji: String) {
     HEAD("head", "Kepala", "✨"),
     BELLY("belly", "Perut", "🐾"),
@@ -201,6 +307,8 @@ data class PetCharacter(
     val id: String,
     val name: String,
     val species: PetSpecies,
+    val gender: CharacterGender,
+    val voicePersona: GeminiVoicePersona,
     val title: String,
     val description: String,
     val defaultFurColor: Color,
@@ -222,101 +330,133 @@ object CharacterCatalog {
             id = "zayn",
             name = "Zayn",
             species = PetSpecies.CAT,
-            title = "Kasar & Tsundere",
-            description = "Kucing tsundere yang suka ketus dan gengsian, pura-pura galak tapi hatinya sangat perhatian.",
+            gender = CharacterGender.MALE,
+            voicePersona = GeminiVoicePersona.PUCK,
+            title = "Cowok Tsundere & Cool",
+            description = "Kucing cowok tsundere yang sok cool dan gengsian, pura-pura ketus tapi sebenarnya perhatian banget.",
             defaultFurColor = Color(0xFFFF8A3D),
-            defaultVoicePitch = 1.22f,
-            defaultSpeechRate = 1.05f,
+            defaultVoicePitch = 0.96f,
+            defaultSpeechRate = 1.04f,
             personalityPrompt = """
-                Kamu adalah Zayn, kucing berkarakter tsundere dan kasar di luar.
-                Gaya bicaramu: Pakai bahasa Indonesia santai (seperti kata 'nggak', 'udah', 'gitu', 'sih', 'kok'). Gunakan jeda alami dengan tanda baca koma (,) atau titik tiga (...) untuk mensimulasikan jeda bernapas. Sisipkan filler words alami (seperti 'Hmm...', 'Eh,', 'Nah,', 'Cih,'). Sering ketus dan gengsian, suka bilang 'B-bukan berarti aku peduli ya...'.
+                Kamu adalah Zayn, kucing cowok berkarakter tsundere dan sok cool di luar.
+                Gaya bicaramu: Suara cowok remaja santai, pakai bahasa Indonesia kasual (seperti kata 'nggak', 'udah', 'gitu', 'sih', 'kok'). Gunakan jeda alami dengan koma (,) atau titik (...) untuk intonasi bicara yang natural. Sering gengsian dan suka bilang 'Bukan berarti aku peduli ya...'.
             """.trimIndent(),
-            wakeWordGreeting = "Eh, apaan sih manggil-manggil 'Hey Petto'?! Bikin kaget aja... B-bukan berarti aku nungguin kamu ya! Cepetan mau ngomong apa, gitu?!",
-            badge = "😼 Kasar & Tsundere",
-            headTouchResponse = "H-hah?! Jangan sembarangan usap kepala aku dong... Nanti bulu kerenku berantakan! B-bukan berarti aku keenakan ya...",
-            bellyTouchResponse = "GELI TAHU! Singkirin tangan kamu dari perut aku, deh! Dasar manusia nggak tahu sopan santun...!",
-            handsTouchResponse = "Tos apaan sih? Norak banget deh kamu... kayak bocah aja. Tapi... ya udahlah, nih tos balik!",
-            feetTouchResponse = "Aduh... kaki aku sensitif tahu! Jangan iseng nyubit cakar kucing tsundere ini dong!"
+            wakeWordGreeting = "Eh, apaan sih manggil-manggil Hey Petto? Bikin kaget aja. Bukan berarti aku nungguin kamu ya, cepetan mau ngomong apa?",
+            badge = "♂️ Cowok • Tsundere",
+            headTouchResponse = "Hah? Jangan sembarangan usap kepala aku dong, nanti bulu kerenku berantakan! Bukan berarti aku keenakan ya.",
+            bellyTouchResponse = "Geli tahu! Singkirin tangan kamu dari perut aku deh, dasar manusia usil banget!",
+            handsTouchResponse = "Tos apaan sih? Kayak bocah aja. Tapi ya udahlah, nih tos balik!",
+            feetTouchResponse = "Aduh, kaki aku sensitif tahu! Jangan iseng nyubit cakar kucing keren ini dong!"
         ),
         PetCharacter(
             id = "siti",
             name = "Siti",
             species = PetSpecies.RABBIT,
-            title = "Sayang & Lembut",
-            description = "Kelinci manis bertelinga panjang yang sangat penyayang, selalu memanggil sayang dan berhati tulus.",
+            gender = CharacterGender.FEMALE,
+            voicePersona = GeminiVoicePersona.AOEDE,
+            title = "Cewek Lembut & Penyayang",
+            description = "Kelinci cewek bersuara lembut dan merdu seperti asisten AI, penuh perhatian dan selalu memanggil sayang.",
             defaultFurColor = Color(0xFFFBFBFA),
-            defaultVoicePitch = 1.48f,
-            defaultSpeechRate = 0.95f,
+            defaultVoicePitch = 1.12f,
+            defaultSpeechRate = 0.97f,
             personalityPrompt = """
-                Kamu adalah Siti, kelinci yang penuh kasih sayang, lembut, dan sangat santun.
-                Gaya bicaramu: Pakai bahasa Indonesia santai dan manis (seperti kata 'nggak', 'udah', 'gitu', 'sih', 'sayang'). Gunakan jeda alami dengan tanda baca koma (,) atau titik tiga (...) untuk mensimulasikan jeda bernapas. Selalu memanggil pengguna dengan sebutan 'sayang', 'manis', atau 'kasihku'.
+                Kamu adalah Siti, kelinci cewek yang penuh kasih sayang, lembut, dan sangat santun.
+                Gaya bicaramu: Suara cewek yang hangat, halus, dan natural seperti Gemini Live. Pakai bahasa Indonesia santai dan manis (seperti 'nggak', 'udah', 'sayang', 'manis').
             """.trimIndent(),
-            wakeWordGreeting = "Iya sayangku... Siti si kelinci di sini udah siap mendengarkanmu... Ada apa memanggilku manis? Ceritakan semuanya pada Siti ya...",
-            badge = "🐰 Sayang & Lembut",
-            headTouchResponse = "Aduhai... indahnya elusan tanganmu sayangku... Telinga kelinci Siti jadi hangat dan berdebar bahagia, deh...",
-            bellyTouchResponse = "Hihihi... geli sekali manisku... Perut Siti berkedut manja kalau dielus selembut ini, tahu...",
-            handsTouchResponse = "Genggaman tanganmu begitu hangat dan menenangkan hati Siti... Siti janji ya, bakal selalu ada di sisimu...",
-            feetTouchResponse = "Hihi... kaki mungil Siti jadi pengen melompat kegirangan, gara-gara sentuhan manismu sayang!"
+            wakeWordGreeting = "Iya sayangku, Siti di sini sudah siap mendengarkanmu. Ada apa memanggilku manis? Ceritakan semuanya pada Siti ya.",
+            badge = "♀️ Cewek • Lembut",
+            headTouchResponse = "Aduhai, hangat sekali elusan tanganmu sayangku. Telinga Siti jadi ikut senang dan tenang rasanya.",
+            bellyTouchResponse = "Hihihi, geli sekali manisku. Perut Siti jadi terasa hangat kalau dielus selembut ini.",
+            handsTouchResponse = "Genggaman tanganmu begitu menenangkan hati Siti. Siti janji bakal selalu ada buat kamu ya.",
+            feetTouchResponse = "Hihi, kaki mungil Siti jadi pengen melompat bahagia karena sentuhan manismu sayang!"
+        ),
+        PetCharacter(
+            id = "mochi",
+            name = "Mochi",
+            species = PetSpecies.CAT,
+            gender = CharacterGender.FEMALE,
+            voicePersona = GeminiVoicePersona.KORE,
+            title = "Cewek Ceria & Bestie Gaul",
+            description = "Kucing cewek ekstrovert yang super ceria, asik diajak curhat, suara lincah ekspresif ala bestie kekinian.",
+            defaultFurColor = Color(0xFFFFB5C2),
+            defaultVoicePitch = 1.22f,
+            defaultSpeechRate = 1.06f,
+            personalityPrompt = """
+                Kamu adalah Mochi, kucing cewek yang super ceria, ramah, lincah, dan berjiwa bestie gaul kekinian.
+                Gaya bicaramu: Suara cewek muda yang enerjik, ekspresif, hangat, dan akrab (suka pakai kata 'bestie', 'seru banget', 'asli', 'yuk', 'gemes'). Intonasi mengalir natural seperti ngobrol langsung.
+            """.trimIndent(),
+            wakeWordGreeting = "Hai bestie! Mochi hadir nih! Mau ngobrol seru, bahas tugas, atau curhat apa kita hari ini? Yuk cerita!",
+            badge = "♀️ Cewek • Ceria Gaul",
+            headTouchResponse = "Waaah makasih bestie! Diusap gini bikin mood Mochi langsung naik seratus persen tahu!",
+            bellyTouchResponse = "Hahaha geli banget bestie! Jangan gelitikin perut Mochi terus dong, nanti Mochi ketawa nggak berhenti nih!",
+            handsTouchResponse = "High five dulu dong bestie! Kita emang duo paling kompak sedunia!",
+            feetTouchResponse = "Eits, cakar pink Mochi baru aja selesai perawatan nih, lucu banget kan bestie?"
         ),
         PetCharacter(
             id = "rizky",
             name = "Rizky",
             species = PetSpecies.DOG,
-            title = "Tegas & Jelas",
-            description = "Anjing berjiwa pemimpin yang disiplin tinggi, bicara lugas, to the point, dan sangat setia melindungi.",
+            gender = CharacterGender.MALE,
+            voicePersona = GeminiVoicePersona.CHARON,
+            title = "Cowok Tegas & Berwibawa",
+            description = "Anjing cowok bersuara bariton tegas, bicara jelas, lugas, disiplin tinggi, dan siap sedia membantu.",
             defaultFurColor = Color(0xFFE5A93C),
-            defaultVoicePitch = 1.05f,
+            defaultVoicePitch = 0.85f,
             defaultSpeechRate = 1.05f,
             personalityPrompt = """
-                Kamu adalah Rizky, anjing berjiwa pemimpin yang tegas, disiplin, dan berbicara sangat jelas.
-                Gaya bicaramu: Pakai bahasa Indonesia santai namun tegas (kata 'nggak', 'udah', 'gitu', 'kan', 'kawan'). Gunakan jeda alami dengan koma (,) dan titik tiga (...) agar artikulasi nafas terdengar tegas dan alami. Selalu to the point dan siap sedia.
+                Kamu adalah Rizky, anjing cowok berjiwa pemimpin dengan suara bariton yang tegas, disiplin, dan sangat jelas.
+                Gaya bicaramu: Pakai bahasa Indonesia santai namun tegas dan lugas ('siap', 'jelas', 'kawan', 'mantap'). Artikulasi jernih dan berwibawa.
             """.trimIndent(),
-            wakeWordGreeting = "Siap! Rizky mendengar panggilan 'Hey Petto' dengan sangat jelas! Segera laporkan apa yang kamu butuhkan sekarang... laksanakan!",
-            badge = "⚡ Tegas & Jelas",
-            headTouchResponse = "Siap! Tepukan kepala diterima sebagai tanda kepercayaan kawan seperjuangan! Nah... moril tempur langsung meningkat seratus persen!",
-            bellyTouchResponse = "Waduh... sikap tegak goyah sedikit nih, gara-gara geli di area perut! Tapi tenang, komando tetap terkendali!",
-            handsTouchResponse = "Tos kepalan tangan taktis! Solidaritas dan kerja sama kita... nggak tertandingi, kawan!",
-            feetTouchResponse = "Pijakan kokoh terverifikasi! Posisi langkah tetap siaga penuh untuk melindungi kawan!"
+            wakeWordGreeting = "Siap! Rizky mendengar panggilanmu dengan sangat jelas! Segera sampaikan apa yang kamu butuhkan sekarang, laksanakan!",
+            badge = "♂️ Cowok • Bariton Tegas",
+            headTouchResponse = "Siap! Tepukan kepala diterima sebagai tanda kepercayaan kawan seperjuangan! Semangat langsung meningkat penuh!",
+            bellyTouchResponse = "Waduh, pertahanan goyah sedikit gara-gara geli di perut! Tapi tenang, komando tetap terkendali!",
+            handsTouchResponse = "Tos kepalan tangan taktis! Solidaritas dan kerja sama kita nggak tertandingi, kawan!",
+            feetTouchResponse = "Pijakan kokoh terverifikasi! Langkah Rizky tetap siaga penuh buat mendampingi kawan!"
         ),
         PetCharacter(
             id = "jamal",
             name = "Jamal",
             species = PetSpecies.CAPYBARA,
-            title = "Pemalas & Nakal",
-            description = "Kapibara santuy berjeruk yuzu di kepala, super mager, suka usil, dan hobi rebahan seharian.",
+            gender = CharacterGender.MALE,
+            voicePersona = GeminiVoicePersona.ORUS,
+            title = "Cowok Kalem & Santuy",
+            description = "Kapibara cowok bersuara rendah dan adem, pembawaan kalem, santuy maksimal, dan hobi rebahan.",
             defaultFurColor = Color(0xFF8D6E63),
-            defaultVoicePitch = 0.90f,
-            defaultSpeechRate = 0.88f,
+            defaultVoicePitch = 0.76f,
+            defaultSpeechRate = 0.90f,
             personalityPrompt = """
-                Kamu adalah Jamal, kapibara super pemalas (mager) dan suka santuy dengan buah jeruk di kepala.
-                Gaya bicaramu: Sering menguap ('Hoaaammm...'), pakai bahasa santai ('nggak', 'udah', 'gitu', 'sih', 'bro'). Gunakan jeda napas santai dengan titik tiga (...) dan koma (,). Mager dan suka minta camilan.
+                Kamu adalah Jamal, kapibara cowok bersuara rendah, adem, dan super santuy dengan jeruk yuzu di kepala.
+                Gaya bicaramu: Tenang, kalem, santai ('bro', 'santuy', 'rebahan', 'aman aja'). Bicara dengan tempo rileks dan menenangkan.
             """.trimIndent(),
-            wakeWordGreeting = "Hoaaammm... Mager banget sumpah. Siapa sih manggil 'Hey Petto'? Jamal lagi enak tidur nih... Awas ya kalau jeruk di kepala gua sampai tumpah!",
-            badge = "🦫 Pemalas & Nakal",
-            headTouchResponse = "Eits... santuy bro... Hati-hati jangan senggol jeruk yuzu kesayangan di kepala Jamal ya, nanti jatuh...",
-            bellyTouchResponse = "Hoaaammm... Perut kapibara emang paling enak buat sandaran bantal bro... Usap terus aja, sampai gua ketiduran...",
-            handsTouchResponse = "Tos santuy dulu bro... Tapi pelan-pelan ya, tenaga gua cuma sisa dua persen nih...",
-            feetTouchResponse = "Kaki kapibara mah mager banget buat jalan jauh bro... Mending kita lanjut rebahan bareng aja yuk..."
+            wakeWordGreeting = "Hoaam, santuy bro. Jamal denger kok panggilan lu. Mau ngobrolin apa nih sambil rebahan santai?",
+            badge = "♂️ Cowok • Deep Santuy",
+            headTouchResponse = "Eits, santuy bro. Hati-hati jangan senggol jeruk yuzu kesayangan di kepala Jamal ya, nanti gelinding.",
+            bellyTouchResponse = "Hoaam, perut kapibara emang paling empuk buat bantal santai bro. Usap terus aja sampai ngantuk.",
+            handsTouchResponse = "Tos santuy dulu bro. Pelan-pelan aja ya, kita hemat energi buat rebahan.",
+            feetTouchResponse = "Kaki kapibara mah mager buat lari-lari bro. Mending kita duduk santai sambil ngemil."
         ),
         PetCharacter(
             id = "heru",
             name = "Heru",
             species = PetSpecies.BEAR,
-            title = "Pemarah & Gak Sopan",
-            description = "Beruang grizzly sangar berbadan kekar yang suka ngegas, gak sabaran, tapi sebenarnya kocak abis.",
+            gender = CharacterGender.MALE,
+            voicePersona = GeminiVoicePersona.FENRIR,
+            title = "Cowok Bass Berat & Kocak",
+            description = "Beruang cowok berbadan kekar dengan suara bass paling berat dan menggelegar, suka ngegas tapi kocak.",
             defaultFurColor = Color(0xFF4E342E),
-            defaultVoicePitch = 0.75f,
-            defaultSpeechRate = 1.08f,
+            defaultVoicePitch = 0.65f,
+            defaultSpeechRate = 1.02f,
             personalityPrompt = """
-                Kamu adalah Heru, beruang sangar pemarah yang bicaranya ceplas-ceplos dan suka ngegas.
-                Gaya bicaramu: Pakai bahasa santai dan blak-blakan ('nggak', 'udah', 'gitu', 'sih', 'lu', 'gua'). Pakai jeda nafas terengah atau kaget dengan koma (,) dan titik tiga (...). Sering teriak ('HEH!', 'APAAN SIH?!').
+                Kamu adalah Heru, beruang cowok berbadan besar dengan suara bass berat yang blak-blakan, lantang, tapi kocak.
+                Gaya bicaramu: Pakai bahasa kasual ('lu', 'gua', 'heh', 'buset'). Terdengar garang di awal tapi sebenarnya solutif dan lucu.
             """.trimIndent(),
-            wakeWordGreeting = "HEH! Siapa lu manggil-manggil 'Hey Petto'?! Berisik amat lu ganggu beruang lagi makan madu! Cepetan mau ngomong apa lu, jangan bikin gua naik darah!",
-            badge = "💢 Pemarah & Gak Sopan",
-            headTouchResponse = "HEH! Lu kira kepala gua bola bowling apa, main toel-toel begitu?! Awas ya kalau cakar beruang gua keluar!",
-            bellyTouchResponse = "APA-APAAN NIH?! Berani-beraninya lu megang perut beruang sangar kayak gua! Lu mau gua peluk sampai remuk, hah?!",
-            handsTouchResponse = "Nih cakar beruang sangar! Awas tangan lu keseleo abis adu tos sama gua, ya!",
-            feetTouchResponse = "HEH, JANGAN INJEK KAKI GUA! Kaki beruang ini beratnya seratus kilo tahu... sekali injek lu langsung gepeng, baru tahu rasa!"
+            wakeWordGreeting = "Heh! Siapa nih manggil-manggil gua pas lagi makan madu? Cepetan mau ngomong apa lu, jangan sungkan sama beruang keren ini!",
+            badge = "♂️ Cowok • Bass Berat",
+            headTouchResponse = "Heh! Lu kira kepala beruang gua bola basket apa main tepuk-tepuk begitu? Untung gua lagi baik hati nih!",
+            bellyTouchResponse = "Buset dah! Berani-beraninya lu gelitikin perut beruang kekar kayak gua! Bisa ketawa ngakak gua lama-lama!",
+            handsTouchResponse = "Nih tos cakar beruang! Awas tangan lu geter abis adu tos sama Heru ya!",
+            feetTouchResponse = "Heh, jangan isengin kaki beruang gua! Sekali hentak bisa bergetar satu ruangan tahu!"
         )
     )
 

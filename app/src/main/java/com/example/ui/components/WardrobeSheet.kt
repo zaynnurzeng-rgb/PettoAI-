@@ -1,7 +1,6 @@
 package com.example.ui.components
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -14,16 +13,13 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -42,8 +38,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -51,18 +45,10 @@ import androidx.compose.ui.unit.sp
 import com.example.model.AccessoryStyle
 import com.example.model.AvatarCustomization
 import com.example.model.CostumeStyle
-import com.example.model.CustomizationCatalog
-import com.example.model.EarStyle
-import com.example.model.EyeStyle
-import com.example.model.RoomTheme
 
 enum class WardrobeTab(val title: String, val icon: String) {
     COSTUME("Kostum", "🧥"),
-    EYES("Mata & Ekspresi", "👀"),
-    EARS("Telinga", "👂"),
-    FUR("Warna Bulu", "🎨"),
-    ACCESSORIES("Aksesoris", "✨"),
-    ROOM("Ruangan", "🏠")
+    ACCESSORIES("Aksesoris", "✨")
 }
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
@@ -97,14 +83,14 @@ fun WardrobeSheet(
             ) {
                 Column {
                     Text(
-                        text = "Kustomisasi Avatar",
+                        text = "Menu Kostum & Aksesoris",
                         style = MaterialTheme.typography.titleLarge.copy(
                             fontWeight = FontWeight.Bold,
                             color = MaterialTheme.colorScheme.onSurface
                         )
                     )
                     Text(
-                        text = "Pilih gaya visual sesuai keinginanmu",
+                        text = "Pilih pakaian dan aksesoris favorit (bebas tanpa koin)",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -147,7 +133,7 @@ fun WardrobeSheet(
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 20.dp)
-                    .height(260.dp)
+                    .height(250.dp)
                     .verticalScroll(rememberScrollState())
             ) {
                 when (selectedTab) {
@@ -172,100 +158,6 @@ fun WardrobeSheet(
                         }
                     }
 
-                    WardrobeTab.EYES -> {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            EyeStyle.entries.forEach { eye ->
-                                val isSelected = customization.eyeStyle == eye
-                                SelectionCard(
-                                    title = eye.displayName,
-                                    icon = eye.icon,
-                                    isSelected = isSelected,
-                                    onClick = {
-                                        onCustomizationChanged(customization.copy(eyeStyle = eye))
-                                    },
-                                    modifier = Modifier.testTag("eye_style_${eye.id}")
-                                )
-                            }
-                        }
-                    }
-
-                    WardrobeTab.EARS -> {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            EarStyle.entries.forEach { ear ->
-                                val isSelected = customization.earStyle == ear
-                                SelectionCard(
-                                    title = ear.displayName,
-                                    icon = ear.icon,
-                                    isSelected = isSelected,
-                                    onClick = {
-                                        onCustomizationChanged(customization.copy(earStyle = ear))
-                                    },
-                                    modifier = Modifier.testTag("ear_style_${ear.id}")
-                                )
-                            }
-                        }
-                    }
-
-                    WardrobeTab.FUR -> {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(12.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            CustomizationCatalog.furColors.forEach { opt ->
-                                val isSelected = customization.furColorId == opt.id
-                                Column(
-                                    horizontalAlignment = Alignment.CenterHorizontally,
-                                    modifier = Modifier
-                                        .clip(RoundedCornerShape(16.dp))
-                                        .clickable {
-                                            onCustomizationChanged(
-                                                customization.copy(furColor = opt.color, furColorId = opt.id)
-                                            )
-                                        }
-                                        .padding(8.dp)
-                                        .testTag("fur_color_${opt.id}")
-                                ) {
-                                    Box(
-                                        contentAlignment = Alignment.Center,
-                                        modifier = Modifier
-                                            .size(54.dp)
-                                            .clip(CircleShape)
-                                            .background(opt.color)
-                                            .border(
-                                                width = if (isSelected) 3.5.dp else 1.dp,
-                                                color = if (isSelected) MaterialTheme.colorScheme.primary else Color.LightGray,
-                                                shape = CircleShape
-                                            )
-                                    ) {
-                                        if (isSelected) {
-                                            Icon(
-                                                imageVector = Icons.Default.Check,
-                                                contentDescription = "Dipilih",
-                                                tint = if (opt.color == Color(0xFFFBFBFA) || opt.color == Color(0xFFF7EBE1)) Color.Black else Color.White,
-                                                modifier = Modifier.size(24.dp)
-                                            )
-                                        }
-                                    }
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    Text(
-                                        text = opt.name,
-                                        style = MaterialTheme.typography.labelSmall.copy(fontSize = 11.sp),
-                                        color = MaterialTheme.colorScheme.onSurface
-                                    )
-                                }
-                            }
-                        }
-                    }
-
                     WardrobeTab.ACCESSORIES -> {
                         FlowRow(
                             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -282,27 +174,6 @@ fun WardrobeSheet(
                                         onCustomizationChanged(customization.copy(accessory = acc))
                                     },
                                     modifier = Modifier.testTag("accessory_${acc.id}")
-                                )
-                            }
-                        }
-                    }
-
-                    WardrobeTab.ROOM -> {
-                        FlowRow(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalArrangement = Arrangement.spacedBy(10.dp),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            RoomTheme.entries.forEach { room ->
-                                val isSelected = customization.roomTheme == room
-                                SelectionCard(
-                                    title = room.displayName,
-                                    icon = room.icon,
-                                    isSelected = isSelected,
-                                    onClick = {
-                                        onCustomizationChanged(customization.copy(roomTheme = room))
-                                    },
-                                    modifier = Modifier.testTag("room_theme_${room.id}")
                                 )
                             }
                         }
@@ -324,7 +195,7 @@ fun SelectionCard(
     Surface(
         shape = RoundedCornerShape(16.dp),
         color = if (isSelected) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.6f),
-        border = if (isSelected) androidx.compose.foundation.BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
+        border = if (isSelected) BorderStroke(2.dp, MaterialTheme.colorScheme.primary) else null,
         modifier = modifier
             .width(148.dp)
             .height(72.dp)

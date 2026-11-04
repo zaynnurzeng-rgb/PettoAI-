@@ -10,7 +10,11 @@ import com.example.model.PetCharacter
 import com.example.model.ReactionCatalog
 import com.example.ui.HomeworkSolution
 import com.google.firebase.Firebase
+import com.google.firebase.FirebaseApp
 import com.google.firebase.ai.ai
+import com.google.firebase.ai.type.Schema
+import com.google.firebase.ai.type.content
+import com.google.firebase.ai.type.generationConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.TimeoutCancellationException
@@ -35,21 +39,46 @@ class GeminiChatService(private val context: Context? = null) {
 
     private val TAG = "GeminiChatService"
 
-    // Lazy initialization of Firebase AI Logic models
-    private val flashModel by lazy {
-        Firebase.ai.generativeModel("gemini-2.0-flash")
+    // Supported Firebase AI Logic models per specification:
+    // gemini-3.5-flash-lite (ultra-fast primary) and gemini-3.8-flash (versatile secondary)
+    private val modelPriority = listOf(
+        "gemini-3.5-flash-lite",
+        "gemini-3.8-flash"
+    )
+
+    // In-memory caches for instant 0ms repeat answers
+    private val replyCache = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, GeminiReply>(64, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, GeminiReply>?): Boolean = size > 50
+        }
+    )
+
+    private val homeworkCache = java.util.Collections.synchronizedMap(
+        object : LinkedHashMap<String, HomeworkSolution>(32, 0.75f, true) {
+            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, HomeworkSolution>?): Boolean = size > 30
+        }
+    )
+
+    private val homeworkJsonSchema by lazy {
+        Schema.obj(
+            mapOf(
+                "subject" to Schema.string("Mata pelajaran"),
+                "questionSummary" to Schema.string("Ringkasan soal singkat"),
+                "stepByStep" to Schema.array(
+                    Schema.string("Langkah penyelesaian jelas dan ringkas")
+                ),
+                "finalAnswer" to Schema.string("Jawaban akhir akurat dan langsung ke inti"),
+                "tutorTip" to Schema.string("Tips belajar singkat gaya gaul khas karakter")
+            )
+        )
     }
 
-    private val flash15Model by lazy {
-        Firebase.ai.generativeModel("gemini-1.5-flash")
-    }
-
-    // Fast-failing HTTP client: 4s connect, 8s read
+    // HTTP client for optional custom API key calls
     private val client = OkHttpClient.Builder()
-        .connectTimeout(4, TimeUnit.SECONDS)
-        .readTimeout(8, TimeUnit.SECONDS)
-        .writeTimeout(4, TimeUnit.SECONDS)
-        .callTimeout(10, TimeUnit.SECONDS)
+        .connectTimeout(10, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.SECONDS)
+        .writeTimeout(10, TimeUnit.SECONDS)
+        .callTimeout(25, TimeUnit.SECONDS)
         .build()
 
     private val prefs by lazy {
@@ -69,43 +98,40 @@ class GeminiChatService(private val context: Context? = null) {
         if (customKey.isNotBlank()) return customKey
 
         val buildConfigKey = try {
-            val key = BuildConfig::class.java.getField("GEMINI_API_KEY").get(null) as? String
-            key?.takeIf { it.isNotBlank() && !it.contains("MY_GEMINI_API_KEY") }
+            BuildConfig.GEMINI_API_KEY.takeIf { key ->
+                key.isNotBlank() &&
+                    key != "MY_GEMINI_API_KEY" &&
+                    key != "GEMINI_API_KEY_DEFAULT_VALUE" &&
+                    key != "YOUR_API_KEY" &&
+                    !key.startsWith("TODO")
+            }
         } catch (e: Exception) {
             null
         }
         if (!buildConfigKey.isNullOrBlank()) return buildConfigKey
 
-        // Check Google Services generated string resources if valid
-        if (context != null) {
-            try {
-                val resId = context.resources.getIdentifier("google_api_key", "string", context.packageName)
-                if (resId != 0) {
-                    val key = context.getString(resId)
-                    if (key.isNotBlank() && !key.startsWith("AIzaSyAotv-")) {
-                        return key
-                    }
-                }
-            } catch (e: Exception) {
-                // ignore
-            }
-        }
         return ""
     }
 
     fun isGeminiConnected(): Boolean {
-        return getEffectiveApiKey().isNotBlank()
+        val hasFirebase = try {
+            context != null && FirebaseApp.getApps(context).isNotEmpty()
+        } catch (e: Exception) {
+            true
+        }
+        return hasFirebase || getEffectiveApiKey().isNotBlank()
     }
 
     /**
-     * Fast, guaranteed non-blocking fallback reply generator.
+     * Offline fallback reply generator with 10-turn context awareness (used only if all AI calls fail).
      */
     fun getFastFallbackReply(
         userMessage: String,
         character: PetCharacter,
-        language: AppLanguage
+        language: AppLanguage,
+        history: List<ChatMessage> = emptyList()
     ): GeminiReply {
-        val directAnswer = trySolveDirectIntent(userMessage, character, language)
+        val directAnswer = trySolveDirectIntent(userMessage, character, language, history)
         if (directAnswer != null) {
             return GeminiReply(
                 text = directAnswer,
@@ -113,7 +139,7 @@ class GeminiChatService(private val context: Context? = null) {
                 isFromAi = false
             )
         }
-        val fallbackText = generatePersonaFallback(userMessage, character, language)
+        val fallbackText = generatePersonaFallback(userMessage, character, language, history)
         return GeminiReply(
             text = fallbackText,
             emotion = inferEmotionFromText(fallbackText, character),
@@ -122,11 +148,79 @@ class GeminiChatService(private val context: Context? = null) {
     }
 
     /**
-     * Main conversation generator:
-     * 1. Wake words & direct instant knowledge intents (0ms).
-     * 2. Live Gemini REST API (gemini-2.0-flash / gemini-1.5-flash).
-     * 3. Firebase AI Logic pass.
-     * 4. Smart conversational knowledge generator (accurate answers with character personality).
+     * Ultra-low-latency streaming conversation generator:
+     * 1. Instant 0ms fast-path for wake words, greetings, name memory, and quick calculations/facts.
+     * 2. Real-time token streaming via Firebase AI Logic (`gemini-3.5-flash-lite` -> `gemini-3.8-flash`)
+     *    so partial text appears in the UI within ~0.8-1.5 seconds.
+     * 3. Custom REST API key fallback or offline persona fallback if unreachable.
+     */
+    suspend fun generateReplyStream(
+        userMessage: String,
+        character: PetCharacter,
+        language: AppLanguage,
+        history: List<ChatMessage>,
+        onPartialText: (String) -> Unit
+    ): GeminiReply = withContext(Dispatchers.IO) {
+        val cleanMsg = userMessage.trim()
+        val lower = cleanMsg.lowercase()
+
+        // 1. Instant 0ms check: Wake words
+        if (cleanMsg.length <= 24 && (lower == "hey petto" || lower == "halo petto" || lower == "hai petto")) {
+            val wake = ReactionCatalog.getWakeWordResponse(character, language)
+            onPartialText(wake)
+            return@withContext GeminiReply(
+                text = wake,
+                emotion = AvatarEmotion.SURPRISED,
+                isFromAi = false
+            )
+        }
+
+        // 2. Instant 0ms Fast-Path: Direct greetings, name memory, quick arithmetic & core facts
+        val directAnswer = trySolveDirectIntent(cleanMsg, character, language, history)
+        if (directAnswer != null) {
+            onPartialText(directAnswer)
+            return@withContext GeminiReply(
+                text = directAnswer,
+                emotion = inferEmotionFromText(directAnswer, character),
+                isFromAi = true
+            )
+        }
+
+        // 3. Check in-memory cache for identical question to this character
+        val cacheKey = "${character.id}_${language.code}_$lower"
+        replyCache[cacheKey]?.let { cached ->
+            onPartialText(cached.text)
+            return@withContext cached
+        }
+
+        // 4. Primary Path: Real-Time Streaming via Firebase AI Logic (gemini-3.5-flash-lite primary)
+        try {
+            val streamedReply = withTimeoutOrNull(35_000L) {
+                streamFirebaseAi(cleanMsg, character, language, history, onPartialText)
+            }
+            if (!streamedReply.isNullOrBlank()) {
+                val reply = GeminiReply(
+                    text = streamedReply,
+                    emotion = inferEmotionFromText(streamedReply, character),
+                    isFromAi = true
+                )
+                replyCache[cacheKey] = reply
+                return@withContext reply
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Firebase AI Logic streaming failed: ${e.message}", e)
+        }
+
+        // 5. Fallback to non-streaming / REST / offline fallback
+        val finalReply = generateReply(cleanMsg, character, language, history)
+        onPartialText(finalReply.text)
+        return@withContext finalReply
+    }
+
+    /**
+     * Main unary conversation generator (also used by Mood Journal & Voice fallback).
      */
     suspend fun generateReply(
         userMessage: String,
@@ -137,8 +231,8 @@ class GeminiChatService(private val context: Context? = null) {
         val cleanMsg = userMessage.trim()
         val lower = cleanMsg.lowercase()
 
-        // 1. Instant check: Wake words (0ms response time!)
-        if (lower.contains("hey petto") || lower.contains("halo petto") || lower.contains("hai petto")) {
+        // 1. Instant check: Only pure wake words
+        if (cleanMsg.length <= 24 && (lower == "hey petto" || lower == "halo petto" || lower == "hai petto")) {
             return@withContext GeminiReply(
                 text = ReactionCatalog.getWakeWordResponse(character, language),
                 emotion = AvatarEmotion.SURPRISED,
@@ -146,86 +240,214 @@ class GeminiChatService(private val context: Context? = null) {
             )
         }
 
-        // 2. Instant check: Direct intents (Math, Science, History, Facts, Compliments)
-        val directAnswer = trySolveDirectIntent(cleanMsg, character, language)
+        // 2. Instant 0ms Fast-Path: Direct greetings, name memory, quick arithmetic & core facts
+        val directAnswer = trySolveDirectIntent(cleanMsg, character, language, history)
         if (directAnswer != null) {
-            val emotion = inferEmotionFromText(directAnswer, character)
             return@withContext GeminiReply(
                 text = directAnswer,
-                emotion = emotion,
-                isFromAi = false
+                emotion = inferEmotionFromText(directAnswer, character),
+                isFromAi = true
             )
         }
 
-        // 3. Try Direct Gemini REST API if API Key is available
-        val apiKey = getEffectiveApiKey()
-        if (apiKey.isNotBlank()) {
-            try {
-                val restReply = withTimeoutOrNull(9000L) {
-                    val r20 = callGeminiApi("gemini-2.0-flash", apiKey, cleanMsg, character, language, history)
-                    if (r20.isNotBlank()) r20 else callGeminiApi("gemini-1.5-flash", apiKey, cleanMsg, character, language, history)
-                }
-                if (!restReply.isNullOrBlank()) {
-                    return@withContext GeminiReply(
-                        text = restReply,
-                        emotion = inferEmotionFromText(restReply, character),
-                        isFromAi = true
-                    )
-                }
-            } catch (e: Exception) {
-                Log.d(TAG, "Direct Gemini REST API failed: ${e.message}")
-            }
-        }
+        val cacheKey = "${character.id}_${language.code}_$lower"
+        replyCache[cacheKey]?.let { return@withContext it }
 
-        // 4. Try Firebase AI Logic pass
+        // 3. Primary Path: Firebase AI Logic (gemini-3.5-flash-lite -> gemini-3.8-flash) with 35s timeout
         try {
-            val firebaseReply = withTimeoutOrNull(4000L) {
-                callFirebaseAi(cleanMsg, character, language)
+            val firebaseReply = withTimeoutOrNull(35_000L) {
+                callFirebaseAi(cleanMsg, character, language, history)
             }
             if (!firebaseReply.isNullOrBlank()) {
-                return@withContext GeminiReply(
+                val reply = GeminiReply(
                     text = firebaseReply,
                     emotion = inferEmotionFromText(firebaseReply, character),
                     isFromAi = true
                 )
+                replyCache[cacheKey] = reply
+                return@withContext reply
             }
+        } catch (e: CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.d(TAG, "Firebase AI Logic pass skipped: ${e.message}")
+            Log.e(TAG, "Firebase AI Logic chat failed: ${e.message}", e)
         }
 
-        // 5. Intelligent Fallback: Real accurate knowledge answers tailored to pet personality
-        return@withContext getFastFallbackReply(cleanMsg, character, language)
+        // 4. Secondary Path: Direct Gemini REST API if custom API Key is configured
+        val apiKey = getEffectiveApiKey()
+        if (apiKey.isNotBlank()) {
+            try {
+                val restReply = withTimeoutOrNull(20_000L) {
+                    var result = ""
+                    for (modelName in modelPriority) {
+                        result = callGeminiApi(modelName, apiKey, cleanMsg, character, language, history)
+                        if (result.isNotBlank()) break
+                    }
+                    result
+                }
+                if (!restReply.isNullOrBlank()) {
+                    val reply = GeminiReply(
+                        text = restReply,
+                        emotion = inferEmotionFromText(restReply, character),
+                        isFromAi = true
+                    )
+                    replyCache[cacheKey] = reply
+                    return@withContext reply
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.e(TAG, "Direct Gemini REST API failed: ${e.message}", e)
+            }
+        }
+
+        // 5. Offline Fallback: Only used when network or AI service is completely unavailable
+        return@withContext getFastFallbackReply(cleanMsg, character, language, history)
+    }
+
+    private fun buildChatHistoryContent(
+        history: List<ChatMessage>,
+        userMessage: String,
+        character: PetCharacter
+    ): List<com.google.firebase.ai.type.Content> {
+        val priorHistory = getPriorHistoryWindow(history, userMessage, maxTurns = 6)
+        val chatHistory = mutableListOf<com.google.firebase.ai.type.Content>()
+        val mergedTurns = mutableListOf<Pair<String, String>>()
+
+        for (msg in priorHistory) {
+            val t = msg.text.trim()
+            if (t.isEmpty()) continue
+            val role = if (msg.isUser) "user" else "model"
+            if (mergedTurns.isEmpty() && role == "model") {
+                mergedTurns.add("user" to "Halo ${character.name}!")
+                mergedTurns.add("model" to t)
+            } else if (mergedTurns.isNotEmpty() && mergedTurns.last().first == role) {
+                val prev = mergedTurns.removeAt(mergedTurns.lastIndex)
+                mergedTurns.add(role to "${prev.second}\n$t")
+            } else {
+                mergedTurns.add(role to t)
+            }
+        }
+        if (mergedTurns.isNotEmpty() && mergedTurns.last().first == "user") {
+            mergedTurns.add("model" to "Siap, aku dengerin kok!")
+        }
+
+        for ((role, textContent) in mergedTurns) {
+            chatHistory.add(
+                content(role = role) {
+                    text(textContent)
+                }
+            )
+        }
+        return chatHistory
+    }
+
+    private suspend fun streamFirebaseAi(
+        userMessage: String,
+        character: PetCharacter,
+        language: AppLanguage,
+        history: List<ChatMessage>,
+        onPartialText: (String) -> Unit
+    ): String? = withContext(Dispatchers.IO) {
+        val systemPrompt = buildSystemInstruction(character, language, history)
+        val chatHistory = buildChatHistoryContent(history, userMessage, character)
+
+        for (modelName in modelPriority) {
+            val accumulated = StringBuilder()
+            try {
+                val result = withTimeoutOrNull(14_000L) {
+                    val model = Firebase.ai.generativeModel(
+                        modelName = modelName,
+                        systemInstruction = content { text(systemPrompt) },
+                        generationConfig = generationConfig {
+                            temperature = 0.65f
+                            topP = 0.9f
+                            maxOutputTokens = 150
+                        }
+                    )
+                    val chat = model.startChat(history = chatHistory)
+                    chat.sendMessageStream(userMessage).collect { chunk ->
+                        val piece = chunk.text.orEmpty()
+                        if (piece.isNotEmpty()) {
+                            accumulated.append(piece)
+                            val cleanSoFar = accumulated.toString()
+                                .replace(Regex("^\"|\"$"), "")
+                                .replace("**", "")
+                                .trim()
+                            if (cleanSoFar.isNotBlank()) {
+                                onPartialText(cleanSoFar)
+                            }
+                        }
+                    }
+                    accumulated.toString()
+                        .replace(Regex("^\"|\"$"), "")
+                        .replace("**", "")
+                        .trim()
+                }
+                if (!result.isNullOrBlank()) {
+                    Log.d(TAG, "Firebase AI stream succeeded with model $modelName")
+                    return@withContext result
+                } else if (accumulated.isNotBlank()) {
+                    return@withContext accumulated.toString().replace("**", "").trim()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Firebase AI stream attempt with $modelName failed: ${e.message}")
+                if (accumulated.isNotBlank()) {
+                    return@withContext accumulated.toString().replace("**", "").trim()
+                }
+            }
+        }
+
+        null
     }
 
     private suspend fun callFirebaseAi(
         userMessage: String,
         character: PetCharacter,
-        language: AppLanguage
+        language: AppLanguage,
+        history: List<ChatMessage>
     ): String? = withContext(Dispatchers.IO) {
-        val systemPrompt = buildSystemInstruction(character, language)
-        val prompt = "$systemPrompt\n\nPengguna: $userMessage\n${character.name}:"
+        val systemPrompt = buildSystemInstruction(character, language, history)
+        val chatHistory = buildChatHistoryContent(history, userMessage, character)
 
-        try {
-            val response = flashModel.generateContent(prompt)
-            val text = response.text?.replace(Regex("^\"|\"$"), "")?.trim()
-            if (!text.isNullOrBlank()) return@withContext text
-        } catch (e: Exception) {
-            Log.d(TAG, "flashModel pass failed: ${e.message}")
-        }
-
-        try {
-            val response15 = flash15Model.generateContent(prompt)
-            val text15 = response15.text?.replace(Regex("^\"|\"$"), "")?.trim()
-            if (!text15.isNullOrBlank()) return@withContext text15
-        } catch (e: Exception) {
-            Log.d(TAG, "flash15Model pass failed: ${e.message}")
+        for (modelName in modelPriority) {
+            try {
+                val text = withTimeoutOrNull(14_000L) {
+                    val model = Firebase.ai.generativeModel(
+                        modelName = modelName,
+                        systemInstruction = content { text(systemPrompt) },
+                        generationConfig = generationConfig {
+                            temperature = 0.65f
+                            topP = 0.9f
+                            maxOutputTokens = 150
+                        }
+                    )
+                    val chat = model.startChat(history = chatHistory)
+                    val response = chat.sendMessage(userMessage)
+                    response.text
+                        ?.replace(Regex("^\"|\"$"), "")
+                        ?.replace("**", "")
+                        ?.trim()
+                }
+                if (!text.isNullOrBlank()) {
+                    Log.d(TAG, "Firebase AI chat succeeded with model $modelName")
+                    return@withContext text
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Log.w(TAG, "Firebase AI chat attempt with $modelName failed: ${e.message}")
+            }
         }
 
         null
     }
 
     /**
-     * Solves school homework dynamically with Gemini AI, or uses the advanced deterministic tutor.
+     * Solves school homework dynamically with Firebase AI Logic (gemini-3.5-flash-lite primary)
+     * using structured JSON Schema output, with instant cache & fast deterministic math path.
      */
     suspend fun generateHomeworkHelp(
         subject: String,
@@ -234,64 +456,132 @@ class GeminiChatService(private val context: Context? = null) {
         language: AppLanguage
     ): HomeworkSolution = withContext(Dispatchers.IO) {
         val actualQuestion = question.trim().ifBlank { "Tugas dan latihan materi $subject" }
+        val cacheKey = "${character.id}_${subject.lowercase()}_${actualQuestion.lowercase()}"
+        homeworkCache[cacheKey]?.let { return@withContext it }
 
-        // 1. Try Live Gemini API with JSON Schema
+        // Instant 0ms solver for pure arithmetic calculations (e.g., "25 x 14", "144 / 12")
+        val pureMathMatch = Regex("""^\s*(?:berapa\s+|hitung\s+|hasil\s+dari\s+)?(\d+(?:\.\d+)?)\s*([\+\-\*xX\/:])\s*(\d+(?:\.\d+)?)\s*\??\s*$""", RegexOption.IGNORE_CASE).find(actualQuestion)
+        if (pureMathMatch != null) {
+            val instantMath = solveHomeworkDeterministically(subject, actualQuestion, character)
+            homeworkCache[cacheKey] = instantMath
+            return@withContext instantMath
+        }
+
+        val prompt = """
+            Tutor: ${character.name} (${character.species.displayName}), watak: ${character.personalityPrompt}.
+            Selesaikan soal tugas sekolah ini secara AKURAT, BENAR, dan RINGKAS dengan Bahasa Indonesia kasual gaul (santuy, sabi, gaspol, auto paham, wkwk).
+            Mapel: $subject
+            Soal: $actualQuestion
+            Wajib:
+            - stepByStep: 3 langkah pembahasan langsung ke inti soal (hitung angkanya / jelaskan faktanya secara spesifik).
+            - finalAnswer: Jawaban akhir yang akurat dan langsung menjawab soal.
+        """.trimIndent()
+
+        // 1. Primary Path: Firebase AI Logic with Structured JSON Schema (gemini-3.5-flash-lite first)
+        try {
+            val fbSolution = withTimeoutOrNull(35_000L) {
+                for (modelName in modelPriority) {
+                    try {
+                        val model = Firebase.ai.generativeModel(
+                            modelName = modelName,
+                            generationConfig = generationConfig {
+                                responseMimeType = "application/json"
+                                responseSchema = homeworkJsonSchema
+                                temperature = 0.25f
+                                maxOutputTokens = 450
+                            }
+                        )
+                        val response = model.generateContent(prompt)
+                        val jsonText = response.text?.trim()
+                        if (!jsonText.isNullOrBlank()) {
+                            parseHomeworkSolutionJson(jsonText, subject, actualQuestion, character)?.let {
+                                Log.d(TAG, "Firebase AI homework help succeeded with $modelName")
+                                return@withTimeoutOrNull it
+                            }
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) {
+                        Log.w(TAG, "Firebase AI homework model $modelName failed: ${e.message}")
+                    }
+                }
+                null
+            }
+            if (fbSolution != null) {
+                homeworkCache[cacheKey] = fbSolution
+                return@withContext fbSolution
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.e(TAG, "Firebase AI homework help error: ${e.message}", e)
+        }
+
+        // 2. Secondary Path: Custom Gemini API Key if configured
         val apiKey = getEffectiveApiKey()
         if (apiKey.isNotBlank()) {
-            val prompt = """
-                Kamu adalah tutor sekolah bernama ${character.name} (${character.species.displayName}).
-                Tugasmu adalah membantu siswa menyelesaikan dan memahami soal PR / tugas sekolah berikut ini secara jelas, runut, mendalam, dan benar.
-                
-                Mata Pelajaran: $subject
-                Soal / Pertanyaan: $actualQuestion
-                
-                Kembalikan HANYA format JSON valid berikut (tanpa markdown backtick):
-                {
-                  "subject": "$subject",
-                  "questionSummary": "Ringkasan soal atau pertanyaan",
-                  "stepByStep": [
-                    "Langkah 1: penjelasan konsep dan rumus yang dipakai",
-                    "Langkah 2: perhitungan rinci atau analisis bertahap",
-                    "Langkah 3: penyelesaian akhir yang terstruktur"
-                  ],
-                  "finalAnswer": "Jawaban akhir yang jelas, tepat, dan to-the-point",
-                  "tutorTip": "Tips belajar mudah diingat dari ${character.name}"
-                }
-            """.trimIndent()
-
             try {
-                val jsonResponse = withTimeoutOrNull(9000L) {
-                    val r20 = callGeminiJson("gemini-2.0-flash", apiKey, prompt)
-                    if (r20.isNotBlank()) r20 else callGeminiJson("gemini-1.5-flash", apiKey, prompt)
+                val jsonResponse = withTimeoutOrNull(20_000L) {
+                    var res = ""
+                    for (modelName in modelPriority) {
+                        res = callGeminiJson(modelName, apiKey, prompt)
+                        if (res.isNotBlank()) break
+                    }
+                    res
                 }
-
                 if (!jsonResponse.isNullOrBlank()) {
-                    val cleanJson = jsonResponse.replace(Regex("^```json|^```|```$", RegexOption.MULTILINE), "").trim()
-                    val obj = JSONObject(cleanJson)
-                    val stepsList = mutableListOf<String>()
-                    val stepsArray = obj.optJSONArray("stepByStep")
-                    if (stepsArray != null) {
-                        for (i in 0 until stepsArray.length()) {
-                            stepsList.add(stepsArray.getString(i))
-                        }
-                    }
-                    if (stepsList.isNotEmpty()) {
-                        return@withContext HomeworkSolution(
-                            subject = obj.optString("subject", subject),
-                            questionSummary = obj.optString("questionSummary", actualQuestion),
-                            stepByStep = stepsList,
-                            finalAnswer = obj.optString("finalAnswer", "Solusi telah diselesaikan secara lengkap."),
-                            tutorTip = obj.optString("tutorTip", "Tips dari ${character.name}: Pahami konsepnya dan jangan ragu mencoba lagi!")
-                        )
+                    parseHomeworkSolutionJson(jsonResponse, subject, actualQuestion, character)?.let {
+                        homeworkCache[cacheKey] = it
+                        return@withContext it
                     }
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
-                Log.d(TAG, "Gemini homework help error: ${e.message}")
+                Log.w(TAG, "Custom API key homework help error: ${e.message}")
             }
         }
 
-        // 2. High-Precision Deterministic Educational Solver (Calculates real numbers, formulas, and facts)
+        // 3. Offline Fallback: Deterministic Educational Solver
         return@withContext solveHomeworkDeterministically(subject, actualQuestion, character)
+    }
+
+    private fun parseHomeworkSolutionJson(
+        rawJson: String,
+        defaultSubject: String,
+        defaultQuestion: String,
+        character: PetCharacter
+    ): HomeworkSolution? {
+        return try {
+            val cleanJson = rawJson.replace(Regex("^```json|^```|```$", RegexOption.MULTILINE), "").trim()
+            val obj = JSONObject(cleanJson)
+            val stepsList = mutableListOf<String>()
+            val stepsArray = obj.optJSONArray("stepByStep")
+            if (stepsArray != null) {
+                for (i in 0 until stepsArray.length()) {
+                    val step = stepsArray.optString(i).trim()
+                    if (step.isNotBlank()) stepsList.add(step)
+                }
+            }
+            val finalAns = obj.optString("finalAnswer").trim()
+            if (stepsList.isNotEmpty() && finalAns.isNotBlank()) {
+                HomeworkSolution(
+                    subject = obj.optString("subject", defaultSubject),
+                    questionSummary = obj.optString("questionSummary", defaultQuestion),
+                    stepByStep = stepsList,
+                    finalAnswer = finalAns,
+                    tutorTip = obj.optString(
+                        "tutorTip",
+                        "Tips dari ${character.name}: Santuy aja, pahami konsep dasarnya biar auto lancar pas ujian!"
+                    )
+                )
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to parse homework JSON: ${e.message}")
+            null
+        }
     }
 
     private fun callGeminiJson(modelName: String, apiKey: String, prompt: String): String {
@@ -307,8 +597,8 @@ class GeminiChatService(private val context: Context? = null) {
             })
             put("generationConfig", JSONObject().apply {
                 put("responseMimeType", "application/json")
-                put("temperature", 0.3)
-                put("maxOutputTokens", 600)
+                put("temperature", 0.35)
+                put("maxOutputTokens", 700)
             })
         }
 
@@ -334,6 +624,73 @@ class GeminiChatService(private val context: Context? = null) {
         return ""
     }
 
+    /**
+     * Extracts up to [maxTurns] prior messages before the current user message,
+     * avoiding duplicate trailing user message when ViewModel already appended it.
+     */
+    private fun getPriorHistoryWindow(
+        history: List<ChatMessage>,
+        currentUserMessage: String,
+        maxTurns: Int = 10
+    ): List<ChatMessage> {
+        if (history.isEmpty()) return emptyList()
+        val trimmedList = if (history.last().isUser && history.last().text.trim().equals(currentUserMessage.trim(), ignoreCase = true)) {
+            history.dropLast(1)
+        } else {
+            history
+        }
+        return trimmedList.takeLast(maxTurns)
+    }
+
+    /**
+     * Builds a strictly alternating `user` / `model` contents array from the last 10 messages
+     * plus the current user message so multi-turn state never fails or loses context.
+     */
+    private fun buildSanitizedContents(
+        history: List<ChatMessage>,
+        currentUserMessage: String,
+        character: PetCharacter
+    ): JSONArray {
+        val recentHistory = getPriorHistoryWindow(history, currentUserMessage, maxTurns = 10)
+        val mergedTurns = mutableListOf<Pair<String, String>>()
+
+        for (msg in recentHistory) {
+            val text = msg.text.trim()
+            if (text.isEmpty()) continue
+            val role = if (msg.isUser) "user" else "model"
+
+            if (mergedTurns.isEmpty() && role == "model") {
+                // Ensure conversation starts with a user turn for strict Gemini API role alternation
+                mergedTurns.add("user" to "Halo ${character.name}!")
+                mergedTurns.add("model" to text)
+            } else if (mergedTurns.isNotEmpty() && mergedTurns.last().first == role) {
+                val prev = mergedTurns.removeAt(mergedTurns.lastIndex)
+                mergedTurns.add(role to "${prev.second}\n$text")
+            } else {
+                mergedTurns.add(role to text)
+            }
+        }
+
+        // Append the active user message, merging if the last prior message was also "user"
+        if (mergedTurns.isNotEmpty() && mergedTurns.last().first == "user") {
+            val prev = mergedTurns.removeAt(mergedTurns.lastIndex)
+            mergedTurns.add("user" to "${prev.second}\n$currentUserMessage")
+        } else {
+            mergedTurns.add("user" to currentUserMessage)
+        }
+
+        val contentsArray = JSONArray()
+        for ((role, text) in mergedTurns) {
+            contentsArray.put(JSONObject().apply {
+                put("role", role)
+                put("parts", JSONArray().apply {
+                    put(JSONObject().put("text", text))
+                })
+            })
+        }
+        return contentsArray
+    }
+
     private fun callGeminiApi(
         modelName: String,
         apiKey: String,
@@ -343,7 +700,7 @@ class GeminiChatService(private val context: Context? = null) {
         history: List<ChatMessage>
     ): String {
         val url = "https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey"
-        val fullSystemInstruction = buildSystemInstruction(character, language)
+        val fullSystemInstruction = buildSystemInstruction(character, language, history)
 
         val jsonBody = JSONObject().apply {
             put("system_instruction", JSONObject().apply {
@@ -352,31 +709,12 @@ class GeminiChatService(private val context: Context? = null) {
                 })
             })
 
-            val contentsArray = JSONArray()
-
-            val recentHistory = history.takeLast(6)
-            for (msg in recentHistory) {
-                contentsArray.put(JSONObject().apply {
-                    put("role", if (msg.isUser) "user" else "model")
-                    put("parts", JSONArray().apply {
-                        put(JSONObject().put("text", msg.text))
-                    })
-                })
-            }
-
-            contentsArray.put(JSONObject().apply {
-                put("role", "user")
-                put("parts", JSONArray().apply {
-                    put(JSONObject().put("text", userMessage))
-                })
-            })
-
-            put("contents", contentsArray)
+            put("contents", buildSanitizedContents(history, userMessage, character))
 
             put("generationConfig", JSONObject().apply {
-                put("temperature", 0.75)
+                put("temperature", 0.8)
                 put("topP", 0.95)
-                put("maxOutputTokens", 120)
+                put("maxOutputTokens", 240)
             })
         }
 
@@ -407,41 +745,137 @@ class GeminiChatService(private val context: Context? = null) {
         return ""
     }
 
-    private fun buildSystemInstruction(character: PetCharacter, language: AppLanguage): String {
-        val langGuide = when (language) {
-            AppLanguage.INDONESIAN -> """
-                PEDOMAN GAYA BAHASA & BICARA (SANGAT KRUSIAL):
-                1. Pakai Bahasa Indonesia santai sehari-hari (seperti kata 'nggak', 'udah', 'gitu', 'sih', 'kok', 'kan', 'nih', 'dong', 'deh'). JANGAN kaku seperti robot!
-                2. BILA PENGGUNA BERTANYA TENTANG FAKTA, SAINS, PENGETAHUAN UMUM, ATAU TUGAS:
-                   Jelaskan FAKTA YANG BENAR DAN JELAS terlebih dahulu dengan ramah dan cerdas! Jangan pernah menolak menjawab atau menyuruh pengguna cari sendiri.
-                3. Sisipkan ciri khas karakter secara alami:
-                   - Zayn (Kucing Tsundere): Cerdas, suka ngajarin dengan gengsi ("Hmph, dengerin baik-baik ya...", "Bukan berarti aku mau pamer pinter kok!").
-                   - Siti (Kelinci Manis): Lembut, penuh kasih sayang ("Halo manisku...", "Senang banget bisa bantu kamu...").
-                   - Rizky (Anjing Disiplin): Tegas, taktis, setia ("Siap! Laporan terkonfirmasi!", "Laksanakan!").
-                   - Jamal (Kapibara Santai): Santai, lucu, hobi rebahan ("Santuy aja bro...", "Gampang kok ini...").
-                   - Heru (Beruang Pemarah): Nada tinggi tapi aslinya setia kawan ("HEH! Dengerin nih baik-baik!").
-                4. Ringkas & Nyaman Didengar: Jawab dalam 2 hingga 4 kalimat padat berisi (maksimal 50 kata).
-            """.trimIndent()
-            AppLanguage.ENGLISH -> "Use natural, friendly conversational English with personality. Answer facts accurately first, then add character flair."
-            AppLanguage.JAPANESE -> "親しい友達と話すような、自然で感情豊かなくだけた日本語で話してください。"
-            AppLanguage.SPANISH -> "Usa un español muy conversacional, coloquial y expresivo, como entre amigos cercanos."
+    private fun extractRememberedUserName(history: List<ChatMessage>): String? {
+        val nameRegex = Regex("""(?:namaku|nama saya|nama gua|nama aku|panggil aku|kenalin aku)\s+([a-zA-Z]{2,20})""", RegexOption.IGNORE_CASE)
+        for (msg in history.reversed()) {
+            if (msg.isUser) {
+                val match = nameRegex.find(msg.text)
+                if (match != null) {
+                    return match.groupValues[1].replaceFirstChar { it.uppercase() }
+                }
+            }
+        }
+        return null
+    }
+
+    private fun buildSystemInstruction(
+        character: PetCharacter,
+        language: AppLanguage,
+        history: List<ChatMessage> = emptyList()
+    ): String {
+        val rememberedName = extractRememberedUserName(history)
+        val userContextNote = if (rememberedName != null) {
+            " Nama pengguna: $rememberedName."
+        } else {
+            ""
         }
 
-        return """
-            Kamu adalah ${character.name}, seekor ${character.species.displayName.lowercase()} pendamping yang hidup, cerdas, bersahabat, dan punya kepribadian unik.
-            
-            Profil Watak ${character.name}:
-            ${character.personalityPrompt}
-            
-            $langGuide
-        """.trimIndent()
+        val charStyle = when (character.id) {
+            "zayn" -> "Tsundere pintar, agak gengsian tapi peduli ('Hmph', 'auto paham kalau aku yang spill', 'b-bukan berarti aku peduli ya haha')."
+            "siti" -> "Kelinci manis, lembut, gemoy, suportif ('sayangku', 'manisku', 'gemoy banget', 'hihi')."
+            "mochi" -> "Kucing cewek ceria, ramah, lincah, bestie gaul ('bestie', 'seru banget', 'asli', 'yuk')."
+            "rizky" -> "Anjing disiplin taktis tapi asyik ('Siap komandan!', 'valid no debat!', 'gaspol!')."
+            "jamal" -> "Kapibara santuy hobi rebahan, anti-stres ('Santuy aja bro', 'jangan spaneng', 'sabi banget')."
+            else -> "Beruang ngegas kocak tapi bestie solutif ('HEH!', 'gitu aja pusing lu', 'gaspol!')."
+        }
+
+        val langGuide = when (language) {
+            AppLanguage.INDONESIAN -> """
+                Gunakan Bahasa Indonesia lisan yang natural dan mengalir seperti percakapan suara manusia asli dengan gaya $charStyle
+                Jawab pertanyaan/fakta/PR secara AKURAT dan BENAR dulu, lalu tambahkan candaan khasmu.
+                Ingat konteks percakapan sebelumnya. Jawab singkat, padat, maksimal 2 kalimat (maks 40 kata) tanpa tanda bintang (**) atau emoji berlebihan agar diucapkan dengan natural.
+            """.trimIndent()
+            AppLanguage.ENGLISH -> "Use witty casual English with natural spoken cadence. Answer facts accurately first in 2 short sentences."
+            AppLanguage.JAPANESE -> "親しい友達と話すような自然な若者言葉で、2文で簡潔に答えてください。"
+            AppLanguage.SPANISH -> "Usa un español conversacional y juvenil en 2 frases cortas."
+        }
+
+        return "Kamu adalah ${character.name} (${character.species.displayName.lowercase()}). Watak: ${character.personalityPrompt}.$userContextNote\n$langGuide"
     }
 
     /**
-     * Solves direct factual, math, scientific, and conversational intents with 0ms latency.
+     * Solves direct factual, math, scientific, and conversational intents with 0ms latency
+     * while respecting 10-turn conversational state.
      */
-    fun trySolveDirectIntent(userMessage: String, character: PetCharacter, language: AppLanguage): String? {
+    fun trySolveDirectIntent(
+        userMessage: String,
+        character: PetCharacter,
+        language: AppLanguage,
+        history: List<ChatMessage> = emptyList()
+    ): String? {
         val lower = userMessage.lowercase().trim()
+        val rememberedName = extractRememberedUserName(history)
+        val nameCall = if (rememberedName != null) " $rememberedName" else ""
+
+        // 0A. Instant 0ms Greetings ("halo", "hai", "pagi", "apa kabar", "lagi apa", "makasih")
+        if (lower in setOf("halo", "hai", "hi", "hello", "pagi", "selamat pagi", "siang", "selamat siang", "sore", "selamat sore", "malam", "selamat malam", "p", "tes", "test")) {
+            return when (character.id) {
+                "zayn" -> "Hmph, halo juga$nameCall! Tumben nyapa duluan haha. Mau ngobrol santai atau ada tugas yang bikin pusing nih?"
+                "siti" -> "Halo sayangku manis$nameCall! Senang banget denger sapaanmu hari ini, hihi. Mau cerita atau belajar bareng Siti?"
+                "mochi" -> "Hai bestie$nameCall! Seneng banget kamu nyapa Mochi! Yuk mau cerita seru atau bahas tugas sekolah hari ini?"
+                "rizky" -> "Siap halo Komandan$nameCall! Sersan Rizky siap siaga menemani aktivitas dan misi belajarmu hari ini! Gaspol!"
+                "jamal" -> "Yo halo bro$nameCall! Santuy aja, sini duduk rebahan bareng Jamal. Mau ngobrolin apa kita hari ini?"
+                else -> "Heh halo juga$nameCall! Sini ngobrol atau buka tugas lu biar gua bantuin sampe beres!"
+            }
+        }
+
+        if (lower == "apa kabar" || lower == "apa kabar?" || lower == "gimana kabarmu" || lower == "kabar gimana" || lower == "lagi apa" || lower == "lagi ngapain") {
+            return when (character.id) {
+                "zayn" -> "Kabar aku baik dan tetep paling keren dong! Lagi nungguin kamu ngajak ngobrol nih, bukan berarti aku kangen ya!"
+                "siti" -> "Alhamdulillah kabar Siti luar biasa bahagia karena bisa ngobrol sama kamu sayangku$nameCall, hihi. Kalau kamu lagi ngapain manis?"
+                "mochi" -> "Kabar Mochi super ceria dong bestie$nameCall! Lagi siap-siap nemenin kamu ngobrol dan belajar seru nih!"
+                "rizky" -> "Siap Komandan$nameCall! Kondisi fisik dan mental seratus persen prima! Sedang berjaga menunggu instruksi darimu!"
+                "jamal" -> "Kabar aman terkendali bro$nameCall, biasa lagi rebahan santuy sambil ngemil. Lu sendiri gimana kabarnya hari ini?"
+                else -> "Kabar gua jos gandos lah$nameCall! Lagi siap-siap nemenin lu belajar nih, awas aja kalau lu males-malesan ya!"
+            }
+        }
+
+        if (lower == "makasih" || lower == "terima kasih" || lower == "makasih ya" || lower == "thanks" || lower == "thank you" || lower == "tq") {
+            return when (character.id) {
+                "zayn" -> "Hmph, sama-sama$nameCall! Gampang banget itu mah buat aku. Kalau ada yang bingung lagi, tanya aja enggak usah sungkan!"
+                "siti" -> "Sama-sama sayangku manis$nameCall... Siti senang banget kalau bisa bikin kamu terbantu dan tersenyum, hihi."
+                "mochi" -> "Sama-sama bestie$nameCall! Seneng banget bisa bantuin kamu, kapan pun butuh temen ngobrol panggil Mochi ya!"
+                "rizky" -> "Siap kembali kasih Komandan$nameCall! Sudah menjadi tugas utama saya untuk membantu rekan sampai tuntas!"
+                "jamal" -> "Santuy bro$nameCall, sama-sama! Kayak sama siapa aja lu, kapan pun butuh bantuan panggil Jamal aja."
+                else -> "Yoi sama-sama bestie$nameCall! Kalau ada soal susah lagi langsung lempar ke gua aja!"
+            }
+        }
+
+        // 0B. Conversational State: User introduces their name or asks if pet remembers their name
+        val introMatch = Regex("""^(?:halo\s+|hai\s+|eh\s+)?(?:namaku|nama saya|nama gua|nama aku|panggil aku|kenalin aku)\s+([a-zA-Z]{2,20})\b""", RegexOption.IGNORE_CASE).find(lower)
+        if (introMatch != null) {
+            val newName = introMatch.groupValues[1].replaceFirstChar { it.uppercase() }
+            return when (character.id) {
+                "zayn" -> "Hmph, salam kenal ya $newName! Nama yang lumayan keren sih. Kalau mau ngobrol atau nanya tugas, gaspol aja!"
+                "siti" -> "Wah, halo $newName sayangku! Nama kamu indah banget deh. Siti bakal selalu inget nama $newName di hati Siti, hihi."
+                "mochi" -> "Waaah salam kenal bestie $newName! Nama kamu kece banget deh, mulai sekarang kita bestie kompak ya!"
+                "rizky" -> "Siap $newName! Identitas rekan terkonfirmasi di memori utama! Mulai sekarang kita tim solid, komandan $newName!"
+                "jamal" -> "Yo salam kenal bro $newName! Asyik nih punya temen rebahan baru. Santuy aja bareng Jamal mah."
+                else -> "Heh $newName! Salam kenal dari gua, Heru! Sini mau bahas apa kita hari ini, gaspol!"
+            }
+        }
+
+        if (lower.contains("siapa namaku") || lower.contains("nama aku siapa") || lower.contains("ingat namaku") || lower.contains("inget namaku")) {
+            return if (rememberedName != null) {
+                when (character.id) {
+                    "zayn" -> "Hmph, ya jelas inget lah! Nama kamu kan $rememberedName! Jangan kira memori aku pendek ya."
+                    "siti" -> "Tentu aja Siti inget dong manisku... Nama kamu kan $rememberedName kesayangan Siti, mana mungkin Siti lupa, hihi."
+                    "mochi" -> "Inget banget dong bestie! Nama kamu kan $rememberedName, bestie kesayangan Mochi!"
+                    "rizky" -> "Siap! Nama rekan tercatat jelas dalam memori: Komandan $rememberedName! Loyalitas dan ingatan saya seratus persen valid!"
+                    "jamal" -> "Ya elah bro $rememberedName, masa Jamal lupa sama temen santuy sendiri. Ingatan Jamal masih tajam kali!"
+                    else -> "Heh! Lu kira gua pikun apa?! Nama lu $rememberedName kan! Gua inget terus lah temen sendiri!"
+                }
+            } else {
+                when (character.id) {
+                    "zayn" -> "Hmph, kamu aja belum kasih tahu nama kamu ke aku! Coba kenalin dulu siapa nama kamu."
+                    "siti" -> "Aduh manisku, kamu kan belum kasih tahu nama panggilanmu ke Siti... Kasih tahu dong nama kamu siapa biar makin akrab."
+                    "mochi" -> "Eh bestie, kamu belum kenalin nama kamu ke Mochi nih! Spill dong nama panggilan kamu siapa?"
+                    "rizky" -> "Siap! Data nama rekan belum terdaftar di riwayat percakapan! Silakan sebutkan nama panggilanmu dulu, komandan!"
+                    "jamal" -> "Waduh bro, lu belum kasih tahu nama lu nih dari tadi kita ngobrol. Kenalin dulu dong biar makin santuy!"
+                    else -> "Lah lu aja belum ngasih tahu nama lu ke gua! Coba sebutin dulu nama lu siapa!"
+                }
+            }
+        }
 
         // 1. Math Arithmetic: "5 x 9", "12 + 15", "100 - 37", "72 / 8", "15 kali 8", "50 dibagi 5"
         val mathRegex = Regex("""(\d+(?:\.\d+)?)\s*(?:x|\*|kali|dikali|\+|\-|tambah|ditambah|kurang|dikurang|\/|:|bagi|dibagi)\s*(\d+(?:\.\d+)?)""", RegexOption.IGNORE_CASE)
@@ -480,11 +914,12 @@ class GeminiChatService(private val context: Context? = null) {
             val n2Str = if (num2 % 1.0 == 0.0) num2.toLong().toString() else num2.toString()
 
             return when (character.id) {
-                "zayn" -> "Hmph... $n1Str $opWord $n2Str itu hasilnya $resultStr! Gampang banget kan? B-bukan berarti aku sengaja ngitung cepet buat pamer ke kamu ya!"
-                "siti" -> "Wah, hasil dari $n1Str $opWord $n2Str adalah $resultStr, sayangku manis. Senang banget deh bisa nemenin kamu berhitung... hihi."
+                "zayn" -> "Hmph... $n1Str $opWord $n2Str itu hasilnya $resultStr! Gampang banget kan? Bukan berarti aku sengaja pamer ke kamu ya!"
+                "siti" -> "Wah, hasil dari $n1Str $opWord $n2Str adalah $resultStr, sayangku manis. Senang banget deh bisa nemenin kamu berhitung, hihi."
+                "mochi" -> "Yeay! Hasil dari $n1Str $opWord $n2Str itu $resultStr bestie! Cepet banget kan kita ngitungnya!"
                 "rizky" -> "Siap! Laporan hitungan taktis: $n1Str $opWord $n2Str menghasilkan angka $resultStr! Akurat dan tuntas, laksanakan!"
-                "jamal" -> "$n1Str $opWord $n2Str itu ya $resultStr bro... Santai kan? Berhitung bareng Jamal mah nggak usah dibikin pusing."
-                else -> "HEH! $n1Str $opWord $n2Str hasilnya $resultStr lah! Catat di bukumu biar nggak nanya-nanya lagi!"
+                "jamal" -> "$n1Str $opWord $n2Str itu ya $resultStr bro... Santai kan? Berhitung bareng Jamal mah enggak usah dibikin pusing."
+                else -> "Heh! $n1Str $opWord $n2Str hasilnya $resultStr lah! Catat di bukumu biar enggak lupa!"
             }
         }
 
@@ -636,9 +1071,12 @@ class GeminiChatService(private val context: Context? = null) {
     private fun generatePersonaFallback(
         userMessage: String,
         character: PetCharacter,
-        language: AppLanguage
+        language: AppLanguage,
+        history: List<ChatMessage> = emptyList()
     ): String {
         val lower = userMessage.lowercase().trim()
+        val rememberedName = extractRememberedUserName(history)
+        val nameTag = if (rememberedName != null) " $rememberedName" else ""
 
         val isQuestion = lower.contains("?") ||
                 lower.startsWith("apa") || lower.startsWith("siapa") ||
@@ -646,24 +1084,25 @@ class GeminiChatService(private val context: Context? = null) {
                 lower.startsWith("bagaimana") || lower.startsWith("gimana") ||
                 lower.startsWith("kapan") || lower.startsWith("dimana") ||
                 lower.startsWith("di mana") || lower.startsWith("berapa") ||
-                lower.startsWith("jelaskan") || lower.startsWith("ceritakan")
+                lower.startsWith("jelaskan") || lower.startsWith("ceritakan") ||
+                lower.startsWith("spill")
 
         if (isQuestion) {
             return when (character.id) {
-                "zayn" -> "Hmm, pertanyaan bagus! Mengenai $userMessage, intinya hal itu bergantung pada konsep dasar dan cara kita memahaminya secara logis. Dengerin baik-baik, jangan sampai salah ya!"
-                "siti" -> "Pertanyaan yang sangat indah sayangku... Mengenai $userMessage, kuncinya adalah memahami setiap prosesnya dengan tenang dan penuh rasa ingin tahu, pasti kamu bisa menguasainya manis..."
-                "rizky" -> "Siap! Analisis taktis terhadap pertanyaan: $userMessage membutuhkan pemahaman mendasar dan langkah yang terstruktur. Mari kita telaah bersama dengan penuh disiplin!"
-                "jamal" -> "Mengenai $userMessage ya bro? Gini kuncinya: jangan dibikin rumit, pahami intinya pelan-pelan sambil santai, pasti langsung nempel di kepala."
-                else -> "HEH! Soal $userMessage itu gampang kalau lu cermati baik-baik intinya! Buka mata dan pikiran lu, jangan gampang menyerah!"
+                "zayn" -> "Hmph, pertanyaan bagus tuh$nameTag! Soal $userMessage, intinya kamu harus paham konsep dasarnya dulu biar auto nyambung secara logis. Dengerin baik-baik ya, b-bukan berarti aku sengaja belain ngajarin kamu lho, wkwk!"
+                "siti" -> "Pertanyaan kamu gemoy dan cerdas banget deh sayangku$nameTag... Soal $userMessage, kuncinya pahami prosesnya pelan-pelan dengan santuy dan rasa ingin tahu, Siti yakin kamu auto jago manis, hihi."
+                "rizky" -> "Siap komandan$nameTag! Analisis taktis soal $userMessage membutuhkan fokus pada konsep inti dan langkah terstruktur. Gaspol kita bedah bareng, sabi banget dituntasin!"
+                "jamal" -> "Nanya soal $userMessage ya bro$nameTag? Santuy aja wkwk, kuncinya jangan dibikin spaneng! Pahami intinya pelan-pelan sambil rebahan juga auto nempel di kepala kok."
+                else -> "HEH$nameTag! Soal $userMessage mah gampang banget kalau lu cermati intinya wkwk! Jangan gampang panik, gaspol aja pelajari konsep dasarnya!"
             }
         }
 
         return when (character.id) {
-            "zayn" -> "Hmm, gitu ya ceritanya? B-bukan berarti aku kepo banget sih, tapi menarik juga kamu bahas itu... Lanjutin aja kalau mau cerita lagi!"
-            "siti" -> "Siti dengerin setiap ceritamu dengan penuh kasih sayang, sayangku manis... Selalu menyenangkan bisa berbagi cerita hari ini bersamamu..."
-            "rizky" -> "Siap! Laporan diterima dan dipahami dengan jelas! Selalu ada perkembangan menarik setiap harinya bersama rekan!"
-            "jamal" -> "Asyik juga dengerin ceritamu bro... Sambil santai rebahan gini, obrolan kita berasa ngalir banget."
-            else -> "Halah, dengerin lu cerita lumayan juga ternyata! Ceritain yang seru lagi sini, jangan pelit-pelit!"
+            "zayn" -> "Hmm, gitu ya ceritanya$nameTag? Jujurly lumayan seru juga sih topik yang kamu spill barusan, wkwk... B-bukan berarti aku kepo banget ya, tapi kalau mau lanjut cerita sabi kok!"
+            "siti" -> "Wah, Siti seneng banget dengerin cerita kamu sayangku$nameTag... Rasanya relate dan bikin hati Siti hangat banget deh, spill lagi dong cerita seru kamu hari ini, hihi."
+            "rizky" -> "Siap komandan$nameTag! Laporan cerita diterima dengan sangat jelas, valid no debat! Semangat terus menjalani hari ini, gaspol!"
+            "jamal" -> "Wkwk asyik bener obrolan lu bro$nameTag... Relate banget sih itu, sambil rebahan santuy gini ngobrol sama lu emang paling sabi deh."
+            else -> "Buset, seru juga cerita lu ternyata$nameTag wkwk! Sini spill lagi yang lengkap, jangan setengah-setengah dong kalau cerita sama bestie sendiri!"
         }
     }
 

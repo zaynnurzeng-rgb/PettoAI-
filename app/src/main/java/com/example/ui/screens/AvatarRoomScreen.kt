@@ -21,14 +21,16 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -37,27 +39,26 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.Chat
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.automirrored.filled.VolumeUp
-import androidx.compose.material.icons.filled.ColorLens
-import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.GridView
 import androidx.compose.material.icons.filled.Mic
-import androidx.compose.material.icons.filled.Settings
-import androidx.compose.material.icons.filled.Style
+import androidx.compose.material.icons.filled.Videocam
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
@@ -76,8 +77,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.draw.shadow
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -87,27 +86,23 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import com.example.audio.SpeechRecognitionHelper
-import com.example.model.AppLanguage
 import com.example.ui.AvatarViewModel
-import com.example.model.CareOverlayType
 import com.example.ui.components.Avatar3DCanvas
 import com.example.ui.components.BackgroundThemeDialog
 import com.example.ui.components.CharacterPickerDialog
 import com.example.ui.components.ChatHistoryDialog
 import com.example.ui.components.DynamicBackgroundCanvas
 import com.example.ui.components.FaceToFaceCallView
-import com.example.ui.components.LiquidGlassDefaults
-import com.example.ui.components.LiquidGlassIconButton
-import com.example.ui.components.LiquidGlassPillButton
+import com.example.ui.components.FlashcardStudySheet
+import com.example.ui.components.HomeworkStudyView
 import com.example.ui.components.LiquidGlassSurface
+import com.example.ui.components.MoodJournalSheet
+import com.example.ui.components.PomodoroStudySheet
+import com.example.ui.components.QuizBattleSheet
 import com.example.ui.components.SettingsDialog
+import com.example.ui.components.TalkingTomTopHud
 import com.example.ui.components.VoiceInputDialog
 import com.example.ui.components.WardrobeSheet
-import com.example.ui.components.TalkingTomTopHud
-import com.example.ui.components.HomeworkStudyView
-import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -121,15 +116,16 @@ fun AvatarRoomScreen(
     val coroutineScope = rememberCoroutineScope()
 
     var showWardrobe by remember { mutableStateOf(false) }
+    var showActivityMenu by remember { mutableStateOf(false) }
     var showCharacterPicker by remember { mutableStateOf(false) }
     var showSettings by remember { mutableStateOf(false) }
     var showChatHistory by remember { mutableStateOf(false) }
     var showThemeDialog by remember { mutableStateOf(false) }
     var inputText by remember { mutableStateOf("") }
-    var isSleepLightsOff by remember { mutableStateOf(false) }
     var showChatInput by remember { mutableStateOf(false) }
 
     val wardrobeSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val activitySheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
 
     // Fallback system speech launcher (Google Voice Typing)
     val systemSpeechLauncher = rememberLauncherForActivityResult(
@@ -183,45 +179,10 @@ fun AvatarRoomScreen(
         }
     }
 
-    val quickChips = when (uiState.selectedLanguage) {
-        AppLanguage.INDONESIAN -> listOf(
-            "📞 Tatap Muka Langsung",
-            "🛋️ Ruang Tamu",
-            "🛏️ Kamar Tidur",
-            "🍳 Dapur",
-            "📢 Hey Petto!",
-            "5 x 9 apa?",
-            "Lagi ngapain kamu?",
-            "Ceritakan lelucon!"
-        )
-        AppLanguage.ENGLISH -> listOf(
-            "📞 Face-to-Face Call",
-            "🛋️ Living Room",
-            "🛏️ Bedroom",
-            "🍳 Kitchen",
-            "📢 Hey Petto!",
-            "What is 5 x 9?",
-            "What are you doing?",
-            "Tell me a joke!"
-        )
-        AppLanguage.JAPANESE -> listOf(
-            "📢 Hey Petto!",
-            "Halo Petto!",
-            "何してるの？",
-            "面白い話して！"
-        )
-        AppLanguage.SPANISH -> listOf(
-            "📢 Hey Petto!",
-            "Halo Petto!",
-            "¿Qué estás haciendo?",
-            "¡Cuéntame un chiste!"
-        )
-    }
-
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = Color.Transparent,
-        contentWindowInsets = androidx.compose.foundation.layout.WindowInsets(0, 0, 0, 0)
+        contentWindowInsets = WindowInsets(0, 0, 0, 0)
     ) { _ ->
         Box(modifier = Modifier.fillMaxSize()) {
             // 1. Dynamic Layered 3D Living Room Background Canvas
@@ -231,28 +192,24 @@ fun AvatarRoomScreen(
                 modifier = Modifier.fillMaxSize()
             )
 
-            // 2. Main Talking Tom Interactive UI
+            // 2. Main Interactive UI
             Column(
                 modifier = Modifier
                     .fillMaxSize()
                     .statusBarsPadding()
                     .navigationBarsPadding()
             ) {
-                // Top HUD: Level Badge, Coins, Diamonds, Settings & Shop
+                // Clean Top HUD: Active Character Switcher, Room Theme, Chat History & Settings
                 TalkingTomTopHud(
-                    level = uiState.playerLevel,
-                    levelProgress = uiState.levelProgress,
-                    coins = uiState.coins,
-                    diamonds = uiState.diamonds,
-                    onLevelClick = { showCharacterPicker = true },
-                    onSettingsClick = { showSettings = true },
-                    onShopClick = {
-                        showWardrobe = true
-                        coroutineScope.launch { wardrobeSheetState.show() }
-                    }
+                    activeCharacter = uiState.activeCharacter,
+                    currentThemeIcon = uiState.backgroundTheme.icon,
+                    onSwitchCharacterClick = { showCharacterPicker = true },
+                    onThemeClick = { showThemeDialog = true },
+                    onChatHistoryClick = { showChatHistory = true },
+                    onSettingsClick = { showSettings = true }
                 )
 
-                // Speech Bubble when Tom is speaking or replying
+                // Speech Bubble when character is speaking or replying
                 if (uiState.lastAvatarSpeech.isNotBlank() || uiState.isTalking || uiState.isLoadingAi) {
                     LiquidGlassSpeechBubble(
                         speakerName = uiState.activeCharacter.name,
@@ -264,14 +221,13 @@ fun AvatarRoomScreen(
                     )
                 }
 
-                // 3D Touchable Character Scene (Clean Room without clutter)
+                // 3D Touchable Character Scene
                 Box(
                     contentAlignment = Alignment.Center,
                     modifier = Modifier
                         .weight(1f)
                         .fillMaxWidth()
                 ) {
-                    // Alive 3D Character standing on the carpet
                     Avatar3DCanvas(
                         species = uiState.activeCharacter.species,
                         customization = uiState.customization,
@@ -298,25 +254,67 @@ fun AvatarRoomScreen(
                                 inputText = ""
                             }
                         },
-                        onMicClick = { launchFaceToFaceCall() }
+                        onMicClick = { viewModel.openVoiceInput() }
                     )
                 }
 
-                // Clean Streamlined Bottom Action Dock: Video Call Live, Mode Tugas Sekolah, Chat, Bicara
+                // Main Streamlined Bottom Dock with 1 Consolidated "Menu Aktivitas" Button
                 CleanBottomActionDock(
                     onVideoCallClick = { launchFaceToFaceCall() },
                     onHomeworkClick = { viewModel.openHomeworkMode() },
                     onChatToggle = { showChatInput = !showChatInput },
                     isChatActive = showChatInput,
-                    onMicClick = { launchFaceToFaceCall() },
+                    isPomodoroRunning = uiState.isPomodoroRunning,
+                    pomodoroRemainingSeconds = uiState.pomodoroRemainingSeconds,
+                    onActivityMenuClick = { showActivityMenu = true },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 8.dp)
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
                 )
             }
         }
 
-        // Live Voice Input Modal Dialog with Crash Protection
+        // Consolidated Activity Menu Bottom Sheet
+        if (showActivityMenu) {
+            ActivityMenuBottomSheet(
+                sheetState = activitySheetState,
+                isPomodoroRunning = uiState.isPomodoroRunning,
+                pomodoroRemainingSeconds = uiState.pomodoroRemainingSeconds,
+                onDismiss = {
+                    coroutineScope.launch {
+                        activitySheetState.hide()
+                        showActivityMenu = false
+                    }
+                },
+                onOpenPomodoro = {
+                    showActivityMenu = false
+                    viewModel.openPomodoroTimer()
+                },
+                onOpenFlashcard = {
+                    showActivityMenu = false
+                    viewModel.openFlashcardStudy()
+                },
+                onOpenQuiz = {
+                    showActivityMenu = false
+                    viewModel.openQuizBattle()
+                },
+                onOpenMoodJournal = {
+                    showActivityMenu = false
+                    viewModel.openMoodJournal()
+                },
+                onOpenWardrobe = {
+                    showActivityMenu = false
+                    showWardrobe = true
+                    coroutineScope.launch { wardrobeSheetState.show() }
+                },
+                onOpenRoomTheme = {
+                    showActivityMenu = false
+                    showThemeDialog = true
+                }
+            )
+        }
+
+        // Live Voice Input Modal Dialog
         if (uiState.showVoiceDialog) {
             VoiceInputDialog(
                 isListening = uiState.isListeningMic,
@@ -342,7 +340,7 @@ fun AvatarRoomScreen(
             )
         }
 
-        // Modals & Sheets
+        // Separate Wardrobe (Menu Kostum) Modal Sheet
         if (showWardrobe) {
             WardrobeSheet(
                 sheetState = wardrobeSheetState,
@@ -377,14 +375,7 @@ fun AvatarRoomScreen(
                     showCharacterPicker = false
                 },
                 onPreviewVoice = { char ->
-                    val sampleLine = when (char.id) {
-                        "zayn" -> "Hah?! Lu mau denger suara gua?! B-bukan berarti gua mau ngomong sama lu ya!"
-                        "siti" -> "Halo sayangku, Siti si kelinci manis selalu siap mendengarkanmu dengan penuh kehangatan."
-                        "rizky" -> "Siap! Laporan vokal Rizky terdengar tegas, jelas, dan siap bertugas!"
-                        "jamal" -> "Hoaaammm... Kapibara lagi mager ngomong nih bro, tapi buat lu gua sapa deh."
-                        else -> "HEH! Lu ngapain nyuruh-nyuruh beruang ngomong?! Berisik amat lu jangan bikin emosi!"
-                    }
-                    viewModel.speakText(sampleLine)
+                    viewModel.previewCharacterVoice(char)
                 },
                 onDismiss = { showCharacterPicker = false }
             )
@@ -468,161 +459,92 @@ fun AvatarRoomScreen(
                 onSolve = { viewModel.solveHomework(it) },
                 onSpeakExplanation = { viewModel.speakText(it) },
                 onClose = { viewModel.closeHomeworkMode() },
-                onOpenVoiceInput = { viewModel.openVoiceInput() }
+                onOpenVoiceInput = { viewModel.openVoiceInput() },
+                onOpenFlashcardsForTopic = { topic -> viewModel.openFlashcardStudy(topic) }
             )
         }
-    }
-}
 
-/**
- * Modern Liquid Glass Top Bar
- */
-@Composable
-private fun LiquidGlassTopRoomBar(
-    characterName: String,
-    characterSpeciesEmoji: String,
-    speciesTitle: String,
-    affectionScore: Int,
-    currentThemeIcon: String,
-    onOpenCharacters: () -> Unit,
-    onOpenThemes: () -> Unit,
-    onOpenWardrobe: () -> Unit,
-    onOpenChatHistory: () -> Unit,
-    onOpenSettings: () -> Unit
-) {
-    LiquidGlassSurface(
-        shape = RoundedCornerShape(26.dp),
-        backgroundColor = Color(0x38151D33),
-        elevation = 8.dp,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = 14.dp, vertical = 6.dp)
-            .testTag("top_room_bar")
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.SpaceBetween,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+        // 🎮 Kuis Cerdas Overlay
+        AnimatedVisibility(
+            visible = uiState.showQuizSheet,
+            enter = fadeIn(tween(300)) + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut(tween(250)) + slideOutVertically(targetOffsetY = { it })
         ) {
-            // Character quick pill
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(18.dp))
-                    .clickable(onClick = onOpenCharacters)
-                    .background(Color(0x30FFFFFF))
-                    .border(BorderStroke(1.dp, Color(0x40FFFFFF)), RoundedCornerShape(18.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-                    .testTag("switch_character_button")
-            ) {
-                Text(text = characterSpeciesEmoji, fontSize = 22.sp)
-                Spacer(modifier = Modifier.width(6.dp))
-                Column {
-                    Text(
-                        text = characterName,
-                        style = MaterialTheme.typography.labelMedium.copy(
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
-                    )
-                    Text(
-                        text = "Ganti >",
-                        style = MaterialTheme.typography.labelSmall.copy(
-                            fontSize = 10.sp,
-                            color = Color(0xFF93C5FD)
-                        )
-                    )
-                }
+            BackHandler(enabled = uiState.showQuizSheet) {
+                viewModel.closeQuizBattle()
             }
+            QuizBattleSheet(
+                character = uiState.activeCharacter,
+                coins = uiState.coins,
+                quizStreak = uiState.quizStreak,
+                onAnswerQuestion = { q, idx -> viewModel.answerQuizQuestion(q, idx) },
+                onSpeakReaction = { viewModel.speakText(it) },
+                onClose = { viewModel.closeQuizBattle() }
+            )
+        }
 
-            // Theme Switcher Button
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .clickable(onClick = onOpenThemes)
-                    .background(Color(0x30FFFFFF))
-                    .border(BorderStroke(1.dp, Color(0x40FFFFFF)), RoundedCornerShape(16.dp))
-                    .padding(horizontal = 9.dp, vertical = 6.dp)
-                    .testTag("open_theme_button")
-            ) {
-                Text(text = currentThemeIcon, fontSize = 16.sp)
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "Ruangan",
-                    style = MaterialTheme.typography.labelSmall.copy(
-                        color = Color.White,
-                        fontWeight = FontWeight.SemiBold
-                    )
-                )
+        // ⏱️ Pomodoro Study Timer Overlay
+        AnimatedVisibility(
+            visible = uiState.showPomodoroSheet,
+            enter = fadeIn(tween(300)) + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut(tween(250)) + slideOutVertically(targetOffsetY = { it })
+        ) {
+            BackHandler(enabled = uiState.showPomodoroSheet) {
+                viewModel.closePomodoroTimer()
             }
+            PomodoroStudySheet(
+                character = uiState.activeCharacter,
+                activePreset = uiState.activePomodoroPreset,
+                remainingSeconds = uiState.pomodoroRemainingSeconds,
+                isRunning = uiState.isPomodoroRunning,
+                completedSessions = uiState.pomodoroCompletedSessions,
+                onSelectPreset = { viewModel.selectPomodoroPreset(it) },
+                onToggleStartPause = { viewModel.togglePomodoroStartPause() },
+                onResetTimer = { viewModel.resetPomodoroTimer() },
+                onCompleteNowAndClaim = { viewModel.completePomodoroAndClaimReward() },
+                onClose = { viewModel.closePomodoroTimer() }
+            )
+        }
 
-            // Affection score pill
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
-                    .background(Color(0x44E91E63))
-                    .border(BorderStroke(1.dp, Color(0x66FF80AB)), RoundedCornerShape(16.dp))
-                    .padding(horizontal = 10.dp, vertical = 6.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Favorite,
-                    contentDescription = "Affection",
-                    tint = Color(0xFFFF80AB),
-                    modifier = Modifier.size(16.dp)
-                )
-                Spacer(modifier = Modifier.width(4.dp))
-                Text(
-                    text = "$affectionScore%",
-                    style = MaterialTheme.typography.labelMedium.copy(
-                        fontWeight = FontWeight.Bold,
-                        color = Color.White
-                    )
-                )
+        // 📓 Jurnal Mood Harian & Curhat Tracker Overlay
+        AnimatedVisibility(
+            visible = uiState.showMoodJournalSheet,
+            enter = fadeIn(tween(300)) + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut(tween(250)) + slideOutVertically(targetOffsetY = { it })
+        ) {
+            BackHandler(enabled = uiState.showMoodJournalSheet) {
+                viewModel.closeMoodJournal()
             }
+            MoodJournalSheet(
+                character = uiState.activeCharacter,
+                entries = uiState.moodJournalEntries,
+                isSavingMood = uiState.isSavingMoodEntry,
+                onSubmitMoodEntry = { mood, note -> viewModel.submitMoodJournalEntry(mood, note) },
+                onSpeakResponse = { viewModel.speakText(it) },
+                onClose = { viewModel.closeMoodJournal() }
+            )
+        }
 
-            // Action icon buttons
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(
-                    onClick = onOpenWardrobe,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .testTag("open_wardrobe_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Style,
-                        contentDescription = "Wardrobe",
-                        tint = Color.White
-                    )
-                }
-
-                IconButton(
-                    onClick = onOpenChatHistory,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .testTag("open_chat_history_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.AutoMirrored.Filled.Chat,
-                        contentDescription = "Riwayat Chat",
-                        tint = Color.White
-                    )
-                }
-
-                IconButton(
-                    onClick = onOpenSettings,
-                    modifier = Modifier
-                        .size(38.dp)
-                        .testTag("open_settings_button")
-                ) {
-                    Icon(
-                        imageVector = Icons.Default.Settings,
-                        contentDescription = "Pengaturan",
-                        tint = Color.White
-                    )
-                }
+        // 🃏 Flashcard Otomatis dari Materi Sekolah Overlay
+        AnimatedVisibility(
+            visible = uiState.showFlashcardSheet,
+            enter = fadeIn(tween(300)) + slideInVertically(initialOffsetY = { it }),
+            exit = fadeOut(tween(250)) + slideOutVertically(targetOffsetY = { it })
+        ) {
+            BackHandler(enabled = uiState.showFlashcardSheet) {
+                viewModel.closeFlashcardStudy()
             }
+            FlashcardStudySheet(
+                character = uiState.activeCharacter,
+                selectedSubject = uiState.homeworkSubject,
+                flashcards = uiState.flashcards,
+                isGenerating = uiState.isGeneratingFlashcards,
+                onSelectSubject = { viewModel.selectFlashcardSubject(it) },
+                onGenerateCustomTopic = { viewModel.generateFlashcards(it) },
+                onMarkCardMastered = { viewModel.markFlashcardMastered(it) },
+                onSpeakCard = { viewModel.speakText(it) },
+                onClose = { viewModel.closeFlashcardStudy() }
+            )
         }
     }
 }
@@ -765,7 +687,7 @@ private fun LiquidGlassBottomChatInputBar(
                 .fillMaxWidth()
                 .padding(horizontal = 10.dp, vertical = 8.dp)
         ) {
-            // Microphone live call launcher
+            // Voice Dictation Button
             FloatingActionButton(
                 onClick = onMicClick,
                 shape = CircleShape,
@@ -778,7 +700,7 @@ private fun LiquidGlassBottomChatInputBar(
             ) {
                 Icon(
                     imageVector = Icons.Default.Mic,
-                    contentDescription = "Bicara via Mikrofon",
+                    contentDescription = "Dikte Suara",
                     modifier = Modifier.size(22.dp)
                 )
             }
@@ -791,7 +713,7 @@ private fun LiquidGlassBottomChatInputBar(
                 onValueChange = onInputChange,
                 placeholder = {
                     Text(
-                        "Ketik pesan ke sahabat 3D...",
+                        "Ketik pesan ke sahabat AI...",
                         fontSize = 13.sp,
                         color = Color(0xFF94A3B8)
                     )
@@ -849,11 +771,11 @@ private fun LiquidGlassBottomChatInputBar(
 }
 
 /**
- * Streamlined Clean Bottom Action Dock:
- * - Live Video Call with Front Camera PiP
- * - Mode Ngerjain Tugas Sekolah (Homework & Study Companion)
- * - Keyboard Text Chat Toggle
- * - Fast Mic Dictation
+ * Streamlined Bottom Action Dock with 4 clear actions:
+ * 1. Video Call (Live Voice/Video Call)
+ * 2. Tugas (Scan PR & Tanya Tugas)
+ * 3. Chat (Toggle Text & Voice Dictation Bar)
+ * 4. Menu Aktivitas (Opens consolidated study & companion activity sheet)
  */
 @Composable
 private fun CleanBottomActionDock(
@@ -861,13 +783,23 @@ private fun CleanBottomActionDock(
     onHomeworkClick: () -> Unit,
     onChatToggle: () -> Unit,
     isChatActive: Boolean,
-    onMicClick: () -> Unit,
+    isPomodoroRunning: Boolean,
+    pomodoroRemainingSeconds: Int,
+    onActivityMenuClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val menuLabel = if (isPomodoroRunning) {
+        val m = pomodoroRemainingSeconds / 60
+        val s = pomodoroRemainingSeconds % 60
+        String.format("⏱️ %02d:%02d", m, s)
+    } else {
+        "Aktivitas"
+    }
+
     Surface(
         shape = RoundedCornerShape(28.dp),
         color = Color(0xD90F172A),
-        border = androidx.compose.foundation.BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
+        border = BorderStroke(1.dp, Color.White.copy(alpha = 0.18f)),
         shadowElevation = 12.dp,
         modifier = modifier
     ) {
@@ -878,7 +810,7 @@ private fun CleanBottomActionDock(
                 .fillMaxWidth()
                 .padding(horizontal = 8.dp, vertical = 8.dp)
         ) {
-            // 1. Live Video Call (WhatsApp style)
+            // 1. Live Video Call
             Button(
                 onClick = onVideoCallClick,
                 colors = ButtonDefaults.buttonColors(
@@ -886,7 +818,7 @@ private fun CleanBottomActionDock(
                     contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier.testTag("action_video_call_button")
             ) {
                 Icon(
@@ -910,7 +842,7 @@ private fun CleanBottomActionDock(
                     contentColor = Color.White
                 ),
                 shape = RoundedCornerShape(20.dp),
-                contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
                 modifier = Modifier.testTag("action_homework_button")
             ) {
                 Text(text = "📚", fontSize = 14.sp)
@@ -923,32 +855,224 @@ private fun CleanBottomActionDock(
             }
 
             // 3. Chat Keyboard Toggle
-            IconButton(
+            Button(
                 onClick = onChatToggle,
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(if (isChatActive) Color(0xFF8B5CF6) else Color.White.copy(alpha = 0.12f))
-                    .testTag("action_chat_toggle_button")
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isChatActive) Color(0xFF8B5CF6) else Color.White.copy(alpha = 0.12f),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier.testTag("action_chat_toggle_button")
             ) {
-                Text(text = "💬", fontSize = 16.sp)
+                Text(text = "💬", fontSize = 14.sp)
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = "Chat",
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
-            // 4. Quick Voice Mic
-            IconButton(
-                onClick = onMicClick,
-                modifier = Modifier
-                    .size(42.dp)
-                    .clip(CircleShape)
-                    .background(Color(0xFF3B82F6).copy(alpha = 0.85f))
-                    .testTag("action_mic_button")
+            // 4. Consolidated Menu Aktivitas Button
+            Button(
+                onClick = onActivityMenuClick,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = if (isPomodoroRunning) Color(0xFF06B6D4) else Color(0xFF334155),
+                    contentColor = Color.White
+                ),
+                shape = RoundedCornerShape(20.dp),
+                contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                modifier = Modifier.testTag("action_activity_menu_button")
             ) {
                 Icon(
-                    imageVector = Icons.Default.Mic,
-                    contentDescription = "Bicara",
-                    tint = Color.White,
-                    modifier = Modifier.size(20.dp)
+                    imageVector = Icons.Default.GridView,
+                    contentDescription = "Menu Aktivitas",
+                    modifier = Modifier.size(16.dp)
                 )
+                Spacer(modifier = Modifier.width(5.dp))
+                Text(
+                    text = menuLabel,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
+            }
+        }
+    }
+}
+
+private data class ActivityMenuItem(
+    val tag: String,
+    val emoji: String,
+    val title: String,
+    val subtitle: String,
+    val accentColor: Color,
+    val onClick: () -> Unit
+)
+
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@Composable
+private fun ActivityMenuBottomSheet(
+    sheetState: androidx.compose.material3.SheetState,
+    isPomodoroRunning: Boolean,
+    pomodoroRemainingSeconds: Int,
+    onDismiss: () -> Unit,
+    onOpenPomodoro: () -> Unit,
+    onOpenFlashcard: () -> Unit,
+    onOpenQuiz: () -> Unit,
+    onOpenMoodJournal: () -> Unit,
+    onOpenWardrobe: () -> Unit,
+    onOpenRoomTheme: () -> Unit
+) {
+    val pomodoroSubtitle = if (isPomodoroRunning) {
+        val m = pomodoroRemainingSeconds / 60
+        val s = pomodoroRemainingSeconds % 60
+        String.format("Sedang berjalan • %02d:%02d", m, s)
+    } else {
+        "Timer fokus belajar bareng karakter"
+    }
+
+    val items = listOf(
+        ActivityMenuItem(
+            tag = "menu_item_pomodoro",
+            emoji = "⏱️",
+            title = "Timer Pomodoro",
+            subtitle = pomodoroSubtitle,
+            accentColor = Color(0xFF06B6D4),
+            onClick = onOpenPomodoro
+        ),
+        ActivityMenuItem(
+            tag = "menu_item_flashcard",
+            emoji = "🃏",
+            title = "Flashcard Belajar",
+            subtitle = "Kartu hafalan otomatis materi sekolah",
+            accentColor = Color(0xFFF59E0B),
+            onClick = onOpenFlashcard
+        ),
+        ActivityMenuItem(
+            tag = "menu_item_quiz",
+            emoji = "🎮",
+            title = "Kuis Cerdas AI",
+            subtitle = "Tebak-tebakan & latihan soal seru",
+            accentColor = Color(0xFF8B5CF6),
+            onClick = onOpenQuiz
+        ),
+        ActivityMenuItem(
+            tag = "menu_item_mood",
+            emoji = "📓",
+            title = "Jurnal Mood",
+            subtitle = "Catat perasaan & curhat harian",
+            accentColor = Color(0xFFEC4899),
+            onClick = onOpenMoodJournal
+        ),
+        ActivityMenuItem(
+            tag = "menu_item_wardrobe",
+            emoji = "🧥",
+            title = "Menu Kostum",
+            subtitle = "Pilih kostum & aksesoris secara terpisah",
+            accentColor = Color(0xFF6366F1),
+            onClick = onOpenWardrobe
+        ),
+        ActivityMenuItem(
+            tag = "menu_item_theme",
+            emoji = "🛋️",
+            title = "Tema Ruangan",
+            subtitle = "Ganti suasana ruang tamu, kamar, atau dapur",
+            accentColor = Color(0xFF14B8A6),
+            onClick = onOpenRoomTheme
+        )
+    )
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+        containerColor = Color(0xFF0F172A),
+        shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp),
+        modifier = Modifier.testTag("activity_menu_bottom_sheet")
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp)
+                .padding(bottom = 28.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                Column {
+                    Text(
+                        text = "Menu Aktivitas & Pendamping",
+                        style = MaterialTheme.typography.titleLarge.copy(
+                            fontWeight = FontWeight.Bold,
+                            color = Color.White
+                        )
+                    )
+                    Text(
+                        text = "Pilih aktivitas belajar, hiburan, atau tampilan",
+                        style = MaterialTheme.typography.bodySmall.copy(
+                            color = Color(0xFF94A3B8)
+                        )
+                    )
+                }
+
+                IconButton(onClick = onDismiss) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Tutup",
+                        tint = Color.White
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+                maxItemsInEachRow = 2,
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                items.forEach { item ->
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        color = Color(0xFF1E293B),
+                        border = BorderStroke(1.2.dp, item.accentColor.copy(alpha = 0.6f)),
+                        modifier = Modifier
+                            .weight(1f)
+                            .clickable(onClick = item.onClick)
+                            .testTag(item.tag)
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp)
+                        ) {
+                            Box(
+                                contentAlignment = Alignment.Center,
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clip(RoundedCornerShape(12.dp))
+                                    .background(item.accentColor.copy(alpha = 0.2f))
+                            ) {
+                                Text(text = item.emoji, fontSize = 20.sp)
+                            }
+                            Spacer(modifier = Modifier.height(10.dp))
+                            Text(
+                                text = item.title,
+                                color = Color.White,
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                            Spacer(modifier = Modifier.height(2.dp))
+                            Text(
+                                text = item.subtitle,
+                                color = Color(0xFF94A3B8),
+                                fontSize = 11.sp,
+                                lineHeight = 14.sp
+                            )
+                        }
+                    }
+                }
             }
         }
     }

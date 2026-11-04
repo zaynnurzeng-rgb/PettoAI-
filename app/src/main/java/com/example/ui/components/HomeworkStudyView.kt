@@ -121,6 +121,7 @@ fun HomeworkStudyView(
     onSpeakExplanation: (String) -> Unit,
     onClose: () -> Unit,
     onOpenVoiceInput: () -> Unit,
+    onOpenFlashcardsForTopic: (String) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -147,7 +148,9 @@ fun HomeworkStudyView(
                     MediaStore.Images.Media.getBitmap(context.contentResolver, uri)
                 } else {
                     val source = ImageDecoder.createSource(context.contentResolver, uri)
-                    ImageDecoder.decodeBitmap(source)
+                    ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                        decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                    }
                 }
                 onSetPhoto(bitmap)
                 onSolve(if (questionText.isBlank()) "Tolong jelaskan dan selesaikan soal yang ada di foto tugas ini" else null)
@@ -700,6 +703,31 @@ fun HomeworkStudyView(
                                         color = Color(0xFFFDE68A),
                                         fontSize = 11.sp,
                                         lineHeight = 16.sp
+                                    )
+                                }
+
+                                Spacer(modifier = Modifier.height(12.dp))
+
+                                // Quick Action: Convert Homework Solution to Study Flashcards
+                                Button(
+                                    onClick = {
+                                        onOpenFlashcardsForTopic(
+                                            questionText.ifBlank { solution.questionSummary }
+                                        )
+                                    },
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = Color(0xFF8B5CF6),
+                                        contentColor = Color.White
+                                    ),
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .testTag("homework_to_flashcard_button")
+                                ) {
+                                    Text(
+                                        text = "🃏 Buat Flashcard Hafalan dari Materi Ini",
+                                        fontSize = 12.sp,
+                                        fontWeight = FontWeight.Bold
                                     )
                                 }
                             }
